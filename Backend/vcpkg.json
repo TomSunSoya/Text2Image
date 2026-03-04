@@ -1,0 +1,12 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "dependencies": [
+    "drogon",
+    "spdlog",
+    "nlohmann-json",
+    "jwt-cpp",
+    "mysql-connector-cpp",
+    "curl"
+  ]
+}
