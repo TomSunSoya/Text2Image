@@ -1,2 +1,26 @@
 .vs/
+.idea/
 out/
+build/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+install_manifest.txt
+
+# IDE / compiler artifacts
+*.VC.db
+*.VC.opendb
+*.obj
+*.o
+*.pdb
+*.ilk
+*.log
+*.tmp
+
+# Local secrets / env overrides
+.env
+.env.*
+config.local.json
