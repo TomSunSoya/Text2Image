@@ -34,9 +34,12 @@ find_package(unofficial-mysql-connector-cpp CONFIG REQUIRED)
 find_package(CURL CONFIG REQUIRED)
 
 # 编译 ./src 下所有 .cpp（含子目录）；.h 通过 #include 参与，无需单独列出
-file(GLOB_RECURSE SOURCES src/*.cpp)
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
+file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS include/*.h src/*.h)
 
-add_executable(${PROJECT_NAME} ${SOURCES} "src/main.cpp")
+add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${SOURCES} ${HEADERS})
 
 # 头文件搜索路径：include/ 放对外头文件，src/ 放实现用的 .h 便于 #include
 target_include_directories(${PROJECT_NAME} PRIVATE

@@ -2,6 +2,7 @@
 
 #include "UserRepo.h"
 #include "jwt_utils.h"
+#include "password_utils.h"
 
 std::optional<RegisterResult> AuthService::registerUser(const nlohmann::json& payload,
                                                         ServiceError& error) const
@@ -26,6 +27,7 @@ std::optional<RegisterResult> AuthService::registerUser(const nlohmann::json& pa
         return std::nullopt;
     }
 
+	user.password = security::hashPassword(user.password);
     user.id = repo.insert(user);
     return RegisterResult{user};
 }
@@ -51,7 +53,7 @@ std::optional<LoginResult> AuthService::login(const nlohmann::json& payload, Ser
         user = repo.findByEmail(email);
     }
 
-    if (!user || user->password != password) {
+    if (!user || !security::verifyPassword(password, user->password)) {
         error.status = drogon::k401Unauthorized;
         error.message = "invalid username or password";
         return std::nullopt;
