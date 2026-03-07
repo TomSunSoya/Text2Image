@@ -26,15 +26,16 @@ int main()
             spdlog::warn("Database initialization failed: {}", e.what());
         }
 
-        drogon::app().registerHandler(
-            "/health",
+        const auto healthHandler =
             [](const drogon::HttpRequestPtr&,
                std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
                 auto resp = drogon::HttpResponse::newHttpResponse();
                 resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
                 resp->setBody(R"({"status":"ok"})");
                 callback(resp);
-            });
+            };
+
+        drogon::app().registerHandler("/health", healthHandler);
 
         const auto host = serverConfig.value("host", std::string("0.0.0.0"));
         const auto port = serverConfig.value("port", 8080);
