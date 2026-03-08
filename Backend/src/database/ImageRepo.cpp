@@ -10,7 +10,9 @@
 #include <vector>
 
 #include <mysqlx/xdevapi.h>
+#include <spdlog/spdlog.h>
 
+#include "Backend.h"
 #include "db_manager.h"
 
 namespace {
@@ -19,6 +21,20 @@ constexpr const char* kColumns =
     "id, user_id, request_id, prompt, negative_prompt, num_steps, "
     "height, width, seed, status, image_url, image_base64, error_message, "
     "generation_time, created_at, completed_at";
+
+std::string imageTableName()
+{
+    static const std::string tableName = [] {
+        const auto config = backend::loadConfig();
+        const auto dbName = config.at("database").at("database").get<std::string>();
+        if (dbName.empty()) {
+            throw std::runtime_error("database.database is empty in config.json");
+        }
+        return "`" + dbName + "`.`image_generations`";
+    }();
+
+    return tableName;
+}
 
 std::string timeToDbString(const std::chrono::system_clock::time_point& tp)
 {
@@ -146,29 +162,36 @@ void ImageRepo::ensureTable()
 {
     static std::once_flag once;
     std::call_once(once, [] {
-        database::DBManager::session().sql(R"(
-            CREATE TABLE IF NOT EXISTS image_generations (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                request_id VARCHAR(64) DEFAULT NULL,
-                prompt TEXT,
-                negative_prompt TEXT,
-                num_steps INT DEFAULT NULL,
-                height INT DEFAULT NULL,
-                width INT DEFAULT NULL,
-                seed INT DEFAULT NULL,
-                status VARCHAR(20) DEFAULT NULL,
-                image_url VARCHAR(500) DEFAULT NULL,
-                image_base64 LONGTEXT DEFAULT NULL,
-                error_message TEXT DEFAULT NULL,
-                generation_time DOUBLE DEFAULT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                completed_at DATETIME DEFAULT NULL,
-                INDEX idx_user_id (user_id),
-                INDEX idx_request_id (request_id),
-                INDEX idx_created_at (created_at)
-            )
-        )").execute();
+        try {
+            database::DBManager::session().sql(
+                "CREATE TABLE IF NOT EXISTS " + imageTableName() + R"(
+                (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    request_id VARCHAR(64) DEFAULT NULL,
+                    prompt TEXT,
+                    negative_prompt TEXT,
+                    num_steps INT DEFAULT NULL,
+                    height INT DEFAULT NULL,
+                    width INT DEFAULT NULL,
+                    seed INT DEFAULT NULL,
+                    status VARCHAR(20) DEFAULT NULL,
+                    image_url VARCHAR(500) DEFAULT NULL,
+                    image_base64 LONGTEXT DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    generation_time DOUBLE DEFAULT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME DEFAULT NULL,
+                    INDEX idx_user_id (user_id),
+                    INDEX idx_request_id (request_id),
+                    INDEX idx_created_at (created_at)
+                )
+            )")
+                .execute();
+        } catch (const mysqlx::Error& ex) {
+            spdlog::error("ImageRepo::ensureTable mysqlx error: {}", ex.what());
+            throw std::runtime_error(std::string("failed to create image_generations table: ") + ex.what());
+        }
     });
 }
 
@@ -188,13 +211,13 @@ int64_t ImageRepo::insert(const models::ImageGeneration& generation)
         ? mysqlx::Value(timeToDbString(generation.completed_at.value()))
         : mysqlx::Value();
 
-    database::DBManager::session().sql(R"(
-        INSERT INTO image_generations (
-            user_id, request_id, prompt, negative_prompt, num_steps,
-            height, width, seed, status, image_url, image_base64,
-            error_message, generation_time, created_at, completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    )")
+    database::DBManager::session().sql(
+        "INSERT INTO " + imageTableName() + R"(
+            (user_id, request_id, prompt, negative_prompt, num_steps,
+             height, width, seed, status, image_url, image_base64,
+             error_message, generation_time, created_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        )")
         .bind(generation.user_id,
               generation.request_id,
               generation.prompt,
@@ -231,7 +254,7 @@ std::vector<models::ImageGeneration> ImageRepo::findByUserId(int64_t userId, int
 
     auto result = database::DBManager::session().sql(
         std::string("SELECT ") + kColumns +
-        " FROM image_generations WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?")
+        " FROM " + imageTableName() + " WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?")
         .bind(userId, safeSize, offset)
         .execute();
 
@@ -251,7 +274,7 @@ std::vector<models::ImageGeneration> ImageRepo::findByUserIdAndStatus(int64_t us
 
     auto result = database::DBManager::session().sql(
         std::string("SELECT ") + kColumns +
-        " FROM image_generations WHERE user_id = ? AND status = ? ORDER BY id DESC LIMIT ? OFFSET ?")
+        " FROM " + imageTableName() + " WHERE user_id = ? AND status = ? ORDER BY id DESC LIMIT ? OFFSET ?")
         .bind(userId, status, safeSize, offset)
         .execute();
 
@@ -263,7 +286,7 @@ int64_t ImageRepo::countByUserId(int64_t userId)
     ensureTable();
 
     auto result = database::DBManager::session()
-        .sql("SELECT COUNT(*) FROM image_generations WHERE user_id = ?")
+        .sql("SELECT COUNT(*) FROM " + imageTableName() + " WHERE user_id = ?")
         .bind(userId)
         .execute();
 
@@ -280,7 +303,7 @@ int64_t ImageRepo::countByUserIdAndStatus(int64_t userId, const std::string& sta
     ensureTable();
 
     auto result = database::DBManager::session()
-        .sql("SELECT COUNT(*) FROM image_generations WHERE user_id = ? AND status = ?")
+        .sql("SELECT COUNT(*) FROM " + imageTableName() + " WHERE user_id = ? AND status = ?")
         .bind(userId, status)
         .execute();
 
@@ -298,7 +321,7 @@ std::optional<models::ImageGeneration> ImageRepo::findByIdAndUserId(int64_t id, 
 
     auto result = database::DBManager::session().sql(
         std::string("SELECT ") + kColumns +
-        " FROM image_generations WHERE id = ? AND user_id = ?")
+        " FROM " + imageTableName() + " WHERE id = ? AND user_id = ?")
         .bind(id, userId)
         .execute();
 
@@ -315,7 +338,7 @@ bool ImageRepo::deleteByIdAndUserId(int64_t id, int64_t userId)
     ensureTable();
 
     auto result = database::DBManager::session()
-        .sql("DELETE FROM image_generations WHERE id = ? AND user_id = ?")
+        .sql("DELETE FROM " + imageTableName() + " WHERE id = ? AND user_id = ?")
         .bind(id, userId)
         .execute();
 

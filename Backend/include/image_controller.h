@@ -5,12 +5,16 @@
 class ImageController : public drogon::HttpController<ImageController> {
 public:
     METHOD_LIST_BEGIN
+    ADD_METHOD_TO(ImageController::checkHealth, "/api/images/health", drogon::Get);
     ADD_METHOD_TO(ImageController::create, "/api/images", drogon::Post);
     ADD_METHOD_TO(ImageController::listMy, "/api/images/my-list", drogon::Get);
     ADD_METHOD_TO(ImageController::listMyByStatus, "/api/images/my-list/status/{1}", drogon::Get);
     ADD_METHOD_TO(ImageController::getById, "/api/images/{1:[0-9]+}", drogon::Get);
     ADD_METHOD_TO(ImageController::deleteById, "/api/images/{1:[0-9]+}", drogon::Delete);
     METHOD_LIST_END
+
+    void checkHealth(const drogon::HttpRequestPtr& req,
+                     std::function<void(const drogon::HttpResponsePtr&)>&& callback);
 
     void create(const drogon::HttpRequestPtr& req,
                 std::function<void(const drogon::HttpResponsePtr&)>&& callback);
