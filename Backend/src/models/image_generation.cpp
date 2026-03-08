@@ -45,8 +45,8 @@ namespace models {
         ImageGeneration img;
 
         if (j.contains("id")) img.id = j["id"].get<int64_t>();
-        if (j.contains("userId")) img.user_id = j["userId"].get<int64_t>();
-        if (j.contains("requestId")) img.request_id = j["requestId"].get<std::string>();
+        if (j.contains("user_id")) img.user_id = j["user_id"].get<int64_t>();
+        if (j.contains("request_id")) img.request_id = j["request_id"].get<std::string>();
         if (j.contains("prompt")) img.prompt = j["prompt"].get<std::string>();
         if (j.contains("negativePrompt")) img.negative_prompt = j["negativePrompt"].get<std::string>();
         if (j.contains("numSteps")) img.num_steps = j["numSteps"].get<int>();
@@ -54,7 +54,7 @@ namespace models {
         if (j.contains("width")) img.width = j["width"].get<int>();
         if (j.contains("seed") && !j["seed"].is_null()) img.seed = j["seed"].get<int>();
         if (j.contains("status")) img.status = j["status"].get<std::string>();
-        if (j.contains("imageUrl")) img.image_url = j["imageUrl"].get<std::string>();
+        if (j.contains("image_url")) img.image_url = j["image_url"].get<std::string>();
         if (j.contains("imageBase64")) img.image_base64 = j["imageBase64"].get<std::string>();
         if (j.contains("errorMessage")) img.error_message = j["errorMessage"].get<std::string>();
         if (j.contains("generationTime")) img.generation_time = j["generationTime"].get<double>();

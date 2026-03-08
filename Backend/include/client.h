@@ -15,6 +15,10 @@ class HttpClient {
 public:
     explicit HttpClient(long timeoutSeconds = 120);
 
+    HttpResult get(const std::string& url,
+                   const std::vector<std::string>& headers = {},
+                   bool followRedirects = false) const;
+
     HttpResult postJson(const std::string& url,
                         const std::string& payload,
                         const std::vector<std::string>& headers = {}) const;
