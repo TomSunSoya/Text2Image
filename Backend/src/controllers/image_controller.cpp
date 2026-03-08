@@ -66,6 +66,28 @@ std::optional<int64_t> resolveUserId(const drogon::HttpRequestPtr& req,
 
 } // namespace
 
+void ImageController::checkHealth(const drogon::HttpRequestPtr&,
+                                  std::function<void(const drogon::HttpResponsePtr&)>&& callback)
+{
+    auto resp = drogon::HttpResponse::newHttpResponse();
+    resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+
+    ImageService service;
+    const auto health = service.checkHealth();
+
+    nlohmann::json body = {
+        {"status", health.status},
+        {"modelLoaded", health.model_loaded}
+    };
+    if (!health.detail.empty()) {
+        body["detail"] = health.detail;
+    }
+
+    resp->setStatusCode(drogon::k200OK);
+    resp->setBody(body.dump());
+    callback(resp);
+}
+
 void ImageController::create(const drogon::HttpRequestPtr& req,
                              std::function<void(const drogon::HttpResponsePtr&)>&& callback)
 {
@@ -219,3 +241,4 @@ void ImageController::deleteById(const drogon::HttpRequestPtr& req,
     resp->setBody(R"({"deleted":true})");
     callback(resp);
 }
+

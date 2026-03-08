@@ -23,6 +23,12 @@ struct ImageGetResult {
     models::ImageGeneration generation;
 };
 
+struct ImageHealthResult {
+    std::string status{"unhealthy"};
+    bool model_loaded{false};
+    std::string detail;
+};
+
 class ImageService {
 public:
     std::optional<ImageCreateResult> create(int64_t userId,
@@ -38,4 +44,6 @@ public:
 
     std::optional<ImageGetResult> getById(int64_t userId, int64_t id, ServiceError& error) const;
     bool deleteById(int64_t userId, int64_t id, ServiceError& error) const;
+
+    ImageHealthResult checkHealth() const;
 };

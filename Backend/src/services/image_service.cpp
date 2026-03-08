@@ -367,3 +367,60 @@ bool ImageService::deleteById(int64_t userId, int64_t id, ServiceError& error) c
         return false;
     }
 }
+
+ImageHealthResult ImageService::checkHealth() const
+{
+    ImageHealthResult result;
+
+    try {
+        const auto config = backend::loadConfig();
+        const auto& serviceConfig = config.at("python_service");
+
+        const auto serviceUrl = serviceConfig.at("url").get<std::string>();
+        long timeoutSeconds = serviceConfig.value("timeout_seconds", 30);
+        if (timeoutSeconds <= 0) {
+            timeoutSeconds = 5;
+        }
+        timeoutSeconds = (std::min)(timeoutSeconds, 10L);
+
+        HttpClient client(timeoutSeconds);
+        const auto response = client.get(serviceUrl + "/health");
+
+        if (!response.ok()) {
+            result.status = "unhealthy";
+            result.detail = !response.error.empty()
+                ? response.error
+                : ("http status " + std::to_string(response.status_code));
+            return result;
+        }
+
+        if (response.body.empty()) {
+            result.status = "unhealthy";
+            result.detail = "empty response body";
+            return result;
+        }
+
+        const auto healthJson = nlohmann::json::parse(response.body, nullptr, false);
+        if (healthJson.is_discarded()) {
+            result.status = "unhealthy";
+            result.detail = "invalid json response";
+            return result;
+        }
+
+        const auto remoteStatus = toLower(healthJson.value("status", std::string{}));
+        result.model_loaded = healthJson.value("model_loaded", false);
+
+        if (remoteStatus == "healthy" || remoteStatus == "ok" || remoteStatus == "success" || result.model_loaded) {
+            result.status = "healthy";
+        } else {
+            result.status = "unhealthy";
+        }
+
+        result.detail = remoteStatus;
+        return result;
+    } catch (const std::exception& ex) {
+        result.status = "unhealthy";
+        result.detail = ex.what();
+        return result;
+    }
+}
