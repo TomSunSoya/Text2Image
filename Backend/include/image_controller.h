@@ -10,6 +10,7 @@ public:
     ADD_METHOD_TO(ImageController::listMy, "/api/images/my-list", drogon::Get);
     ADD_METHOD_TO(ImageController::listMyByStatus, "/api/images/my-list/status/{1}", drogon::Get);
     ADD_METHOD_TO(ImageController::getById, "/api/images/{1:[0-9]+}", drogon::Get);
+    ADD_METHOD_TO(ImageController::getStatusById, "/api/images/{1:[0-9]+}/status", drogon::Get);
     ADD_METHOD_TO(ImageController::deleteById, "/api/images/{1:[0-9]+}", drogon::Delete);
     METHOD_LIST_END
 
@@ -29,6 +30,10 @@ public:
     void getById(const drogon::HttpRequestPtr& req,
                  std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                  int64_t id);
+
+    void getStatusById(const drogon::HttpRequestPtr& req,
+                       std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                       int64_t id);
 
     void deleteById(const drogon::HttpRequestPtr& req,
                     std::function<void(const drogon::HttpResponsePtr&)>&& callback,

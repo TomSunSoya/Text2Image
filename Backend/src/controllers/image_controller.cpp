@@ -29,13 +29,52 @@ nlohmann::json toListJson(const ImageListResult& result)
 {
     nlohmann::json content = nlohmann::json::array();
     for (const auto& item : result.content) {
-        content.push_back(item.toJson());
+        auto summary = item.toJson();
+        summary.erase("imageBase64");
+        content.push_back(summary);
     }
 
     return {
         {"content", content},
         {"totalElements", result.total_elements}
     };
+}
+
+nlohmann::json toStatusJson(const models::ImageGeneration& generation)
+{
+    const auto full = generation.toJson();
+
+    nlohmann::json body = {
+        {"id", full.at("id")},
+        {"requestId", full.at("requestId")},
+        {"status", full.at("status")}
+    };
+
+    if (full.contains("errorMessage") && full.at("errorMessage").is_string() && !full.at("errorMessage").get<std::string>().empty()) {
+        body["errorMessage"] = full.at("errorMessage");
+    }
+
+    if (full.contains("generationTime")) {
+        body["generationTime"] = full.at("generationTime");
+    }
+
+    if (full.contains("createdAt")) {
+        body["createdAt"] = full.at("createdAt");
+    }
+
+    if (full.contains("completedAt")) {
+        body["completedAt"] = full.at("completedAt");
+    }
+
+    if (full.contains("imageUrl") && full.at("imageUrl").is_string() && !full.at("imageUrl").get<std::string>().empty()) {
+        body["imageUrl"] = full.at("imageUrl");
+    }
+
+    if (full.contains("imageBase64") && full.at("imageBase64").is_string() && !full.at("imageBase64").get<std::string>().empty()) {
+        body["imageBase64"] = full.at("imageBase64");
+    }
+
+    return body;
 }
 
 void fillServiceError(const drogon::HttpResponsePtr& resp, const ServiceError& error)
@@ -114,7 +153,7 @@ void ImageController::create(const drogon::HttpRequestPtr& req,
             return;
         }
 
-        resp->setStatusCode(drogon::k200OK);
+        resp->setStatusCode(drogon::k202Accepted);
         resp->setBody(result->generation.toJson().dump());
         callback(resp);
     } catch (const json::parse_error& e) {
@@ -216,6 +255,33 @@ void ImageController::getById(const drogon::HttpRequestPtr& req,
     callback(resp);
 }
 
+void ImageController::getStatusById(const drogon::HttpRequestPtr& req,
+                                    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                                    int64_t id)
+{
+    auto resp = drogon::HttpResponse::newHttpResponse();
+    resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+
+    const auto userId = resolveUserId(req, resp);
+    if (!userId) {
+        callback(resp);
+        return;
+    }
+
+    ImageService service;
+    ServiceError error;
+    auto result = service.getById(*userId, id, error);
+    if (!result) {
+        fillServiceError(resp, error);
+        callback(resp);
+        return;
+    }
+
+    resp->setStatusCode(drogon::k200OK);
+    resp->setBody(toStatusJson(result->generation).dump());
+    callback(resp);
+}
+
 void ImageController::deleteById(const drogon::HttpRequestPtr& req,
                                  std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                                  int64_t id)
@@ -241,4 +307,5 @@ void ImageController::deleteById(const drogon::HttpRequestPtr& req,
     resp->setBody(R"({"deleted":true})");
     callback(resp);
 }
+
 
