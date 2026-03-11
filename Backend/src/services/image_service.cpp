@@ -4,12 +4,14 @@
 #include <chrono>
 #include <cctype>
 #include <limits>
+#include <mutex>
 #include <openssl/evp.h>
 #include <spdlog/spdlog.h>
 #include <string>
 
 #include "Backend.h"
 #include "ImageRepo.h"
+#include "async_image_queue.h"
 #include "client.h"
 
 namespace {
@@ -145,30 +147,8 @@ void mergeRemoteResult(const nlohmann::json& remoteJson, models::ImageGeneration
     }
 }
 
-} // namespace
-
-std::optional<ImageCreateResult> ImageService::create(int64_t userId,
-                                                      const nlohmann::json& payload,
-                                                      ServiceError& error) const
+models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation)
 {
-    if (userId <= 0) {
-        error.status = drogon::k401Unauthorized;
-        error.message = "unauthorized";
-        return std::nullopt;
-    }
-
-    models::ImageGeneration generation = models::ImageGeneration::fromJson(payload);
-    if (generation.prompt.empty()) {
-        error.status = drogon::k400BadRequest;
-        error.message = "prompt is required";
-        return std::nullopt;
-    }
-
-    generation.user_id = userId;
-    generation.created_at = std::chrono::system_clock::now();
-    generation.request_id = generation.request_id.empty() ? buildRequestId() : generation.request_id;
-    generation.status = "queued";
-
     long timeoutSeconds = 300;
     std::string serviceUrl;
 
@@ -202,14 +182,14 @@ std::optional<ImageCreateResult> ImageService::create(int64_t userId,
                 generation.error_message = "python service request failed, status: " +
                     std::to_string(response.status_code);
             }
-            spdlog::warn("ImageService::create call {} failed (status: {}, error: {})",
+            spdlog::warn("ImageService async call {} failed (status: {}, error: {})",
                          generateUrl,
                          response.status_code,
                          response.error);
         } else if (response.body.empty()) {
             generation.status = "failed";
             generation.error_message = "python service returned empty response";
-            spdlog::warn("ImageService::create call {} returned empty response body", generateUrl);
+            spdlog::warn("ImageService async call {} returned empty response body", generateUrl);
         } else {
             const auto remoteJson = nlohmann::json::parse(response.body, nullptr, false);
             if (!remoteJson.is_discarded()) {
@@ -217,19 +197,17 @@ std::optional<ImageCreateResult> ImageService::create(int64_t userId,
             } else {
                 generation.status = "failed";
                 generation.error_message = "python service returned invalid json";
-                spdlog::warn("ImageService::create call {} returned invalid json: {}",
-                             generateUrl,
-                             response.body);
+                spdlog::warn("ImageService async call {} returned invalid json", generateUrl);
             }
         }
     } catch (const std::exception& ex) {
         generation.status = "failed";
         generation.error_message = std::string("python service exception: ") + ex.what();
-        spdlog::error("ImageService::create exception: {}", ex.what());
+        spdlog::error("ImageService async exception: {}", ex.what());
     } catch (...) {
         generation.status = "failed";
         generation.error_message = "python service unknown exception";
-        spdlog::error("ImageService::create unknown exception");
+        spdlog::error("ImageService async unknown exception");
     }
 
     if (generation.image_base64.empty() && !generation.image_url.empty()) {
@@ -245,13 +223,95 @@ std::optional<ImageCreateResult> ImageService::create(int64_t userId,
     if ((!generation.image_base64.empty() || !generation.image_url.empty()) && generation.status != "failed") {
         generation.status = "success";
     }
-    if (generation.status.empty()) {
-        generation.status = "queued";
+
+    if (generation.status.empty() || generation.status == "queued") {
+        generation.status = "failed";
+        if (generation.error_message.empty()) {
+            generation.error_message = "model result did not include image data";
+        }
     }
 
     if (generation.status == "success" || generation.status == "failed") {
         generation.completed_at = std::chrono::system_clock::now();
     }
+
+    return generation;
+}
+
+void processQueuedGeneration(const models::ImageGeneration& task)
+{
+    ImageRepo repo;
+
+    if (!repo.updateStatusAndError(task.id, task.user_id, "generating", "")) {
+        spdlog::warn("ImageService async failed to mark generating, id={}, user_id={}", task.id, task.user_id);
+    }
+
+    auto result = runRemoteGeneration(task);
+    if (result.completed_at.has_value() == false && (result.status == "success" || result.status == "failed")) {
+        result.completed_at = std::chrono::system_clock::now();
+    }
+
+    if (!repo.updateGenerationResult(result.id,
+                                     result.user_id,
+                                     result.status,
+                                     result.image_url,
+                                     result.image_base64,
+                                     result.error_message,
+                                     result.generation_time,
+                                     result.completed_at)) {
+        spdlog::warn("ImageService async failed to persist result, id={}, user_id={}", result.id, result.user_id);
+    }
+}
+
+void ensureQueueStarted()
+{
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::size_t workerCount = 1;
+        try {
+            const auto config = backend::loadConfig();
+            const auto& serviceConfig = config.at("python_service");
+            const int configuredWorkers = serviceConfig.value("queue_workers", 1);
+            if (configuredWorkers > 0) {
+                workerCount = static_cast<std::size_t>(configuredWorkers);
+            }
+        } catch (const std::exception& ex) {
+            spdlog::warn("ImageService queue uses default worker count due to config error: {}", ex.what());
+        }
+
+        AsyncImageQueue::instance().start(processQueuedGeneration, workerCount);
+        spdlog::info("ImageService async queue started with {} worker(s)", workerCount);
+    });
+}
+
+} // namespace
+
+std::optional<ImageCreateResult> ImageService::create(int64_t userId,
+                                                      const nlohmann::json& payload,
+                                                      ServiceError& error) const
+{
+    if (userId <= 0) {
+        error.status = drogon::k401Unauthorized;
+        error.message = "unauthorized";
+        return std::nullopt;
+    }
+
+    models::ImageGeneration generation = models::ImageGeneration::fromJson(payload);
+    if (generation.prompt.empty()) {
+        error.status = drogon::k400BadRequest;
+        error.message = "prompt is required";
+        return std::nullopt;
+    }
+
+    generation.user_id = userId;
+    generation.created_at = std::chrono::system_clock::now();
+    generation.request_id = generation.request_id.empty() ? buildRequestId() : generation.request_id;
+    generation.status = "queued";
+    generation.error_message.clear();
+    generation.completed_at = std::nullopt;
+    generation.image_url.clear();
+    generation.image_base64.clear();
+    generation.generation_time = 0;
 
     try {
         ImageRepo repo;
@@ -260,6 +320,23 @@ std::optional<ImageCreateResult> ImageService::create(int64_t userId,
         spdlog::error("ImageService::create persist error: {}", ex.what());
         error.status = drogon::k500InternalServerError;
         error.message = "failed to persist image history";
+        return std::nullopt;
+    }
+
+    try {
+        ensureQueueStarted();
+        AsyncImageQueue::instance().enqueue(generation);
+    } catch (const std::exception& ex) {
+        spdlog::error("ImageService::create enqueue error: {}", ex.what());
+        try {
+            ImageRepo repo;
+            repo.updateStatusAndError(generation.id, generation.user_id, "failed", "failed to enqueue generation task");
+        } catch (...) {
+            spdlog::error("ImageService::create failed to persist enqueue failure state");
+        }
+
+        error.status = drogon::k500InternalServerError;
+        error.message = "failed to enqueue generation task";
         return std::nullopt;
     }
 
