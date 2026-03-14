@@ -94,10 +94,54 @@ class ZImageModelService:
             return
 
         self.is_loading = False
+        self.active_generations = 0
         self.pipe = None
         self.last_error = ""
         self._load_lock = threading.Lock()
+        self._generation_lock = threading.Lock()
+        self._state_lock = threading.Lock()
         self._initialized = True
+
+    def _set_loading(self, value: bool) -> None:
+        with self._state_lock:
+            self.is_loading = value
+
+    def _set_last_error(self, value: str) -> None:
+        with self._state_lock:
+            self.last_error = value
+
+    def _mark_generation_started(self) -> None:
+        with self._state_lock:
+            self.active_generations += 1
+
+    def _mark_generation_finished(self) -> None:
+        with self._state_lock:
+            self.active_generations = max(0, self.active_generations - 1)
+
+    def get_health_snapshot(self) -> dict:
+        with self._state_lock:
+            is_loading = self.is_loading
+            active_generations = self.active_generations
+            last_error = self.last_error
+
+        model_loaded = self.pipe is not None
+        is_generating = active_generations > 0
+
+        if not model_loaded:
+            status = "loading" if is_loading else "unhealthy"
+        elif is_generating:
+            status = "busy"
+        else:
+            status = "healthy"
+
+        return {
+            "status": status,
+            "model_loaded": model_loaded,
+            "is_loading": is_loading,
+            "is_generating": is_generating,
+            "active_generations": active_generations,
+            "detail": last_error,
+        }
 
     def initialize(self, force: bool = False) -> bool:
         return self.load_model(force=force)
@@ -110,8 +154,8 @@ class ZImageModelService:
             if self.pipe is not None and not force:
                 return True
 
-            self.is_loading = True
-            self.last_error = ""
+            self._set_loading(True)
+            self._set_last_error("")
             logger.info(f"Loading model from {LOCAL_MODEL_PATH}")
 
             try:
@@ -124,62 +168,71 @@ class ZImageModelService:
                 return True
             except Exception as e:
                 self.pipe = None
-                self.last_error = str(e)
+                self._set_last_error(str(e))
                 logger.error(f"Failed to load model: {e}")
                 return False
             finally:
-                self.is_loading = False
+                self._set_loading(False)
 
     def generate_image(self, request: GenerateRequest) -> dict:
         if self.pipe is None:
-            raise RuntimeError("pipe is not initialized")
+            loaded = self.initialize()
+            if not loaded or self.pipe is None:
+                detail = self.get_health_snapshot().get("detail") or "model is unavailable"
+                raise RuntimeError(f"Model not loaded: {detail}")
 
-        start_time = datetime.now()
-        request_id = request.request_id or str(uuid.uuid4())
+        with self._generation_lock:
+            self._mark_generation_started()
+            start_time = datetime.now()
+            request_id = request.request_id or str(uuid.uuid4())
 
-        try:
-            generator = None
-            if request.seed is not None:
-                generator = torch.Generator(device=DEVICE).manual_seed(request.seed)
+            try:
+                self._set_last_error("")
+                generator = None
+                if request.seed is not None:
+                    generator = torch.Generator(device=DEVICE).manual_seed(request.seed)
 
-            logger.info(f"Generating image for {request.prompt[:50]}...")
+                logger.info(f"Generating image for {request.prompt[:50]}...")
 
-            result = self.pipe(
-                prompt=request.prompt,
-                negative_prompt=request.negative_prompt,
-                num_inference_steps=request.num_steps,
-                guidance_scale=0.0,
-                height=request.height,
-                width=request.width,
-                generator=generator,
-            )
+                result = self.pipe(
+                    prompt=request.prompt,
+                    negative_prompt=request.negative_prompt,
+                    num_inference_steps=request.num_steps,
+                    guidance_scale=0.0,
+                    height=request.height,
+                    width=request.width,
+                    generator=generator,
+                )
 
-            image = result.images[0]
+                image = result.images[0]
 
-            end_time = datetime.now()
-            generation_time = (end_time - start_time).total_seconds()
+                end_time = datetime.now()
+                generation_time = (end_time - start_time).total_seconds()
 
-            filename = f"{request_id}.png"
-            filepath = os.path.join(TEMP_DIR, filename)
-            image.save(filepath)
+                filename = f"{request_id}.png"
+                filepath = os.path.join(TEMP_DIR, filename)
+                image.save(filepath)
 
-            buffered = io.BytesIO()
-            image.save(buffered, format="PNG")
+                buffered = io.BytesIO()
+                image.save(buffered, format="PNG")
 
-            logger.info(f"Generate image successfully: {request_id}, time: {generation_time}")
+                logger.info(f"Generate image successfully: {request_id}, time: {generation_time}")
 
-            return {
-                "status": "success",
-                "request_id": request_id,
-                "image_url": f"/temp/{filename}",
-                "message": "Successfully generated image",
-                "generation_time": generation_time,
-                "timestamp": datetime.now().isoformat(),
-            }
+                return {
+                    "status": "success",
+                    "request_id": request_id,
+                    "image_url": f"/temp/{filename}",
+                    "message": "Successfully generated image",
+                    "generation_time": generation_time,
+                    "timestamp": datetime.now().isoformat(),
+                }
 
-        except Exception as e:
-            logger.error(f"Failed to generate image: {e}")
-            raise
+            except Exception as e:
+                self._set_last_error(str(e))
+                logger.error(f"Failed to generate image: {e}")
+                raise
+            finally:
+                self._mark_generation_finished()
 
 
 app = FastAPI(
@@ -201,41 +254,44 @@ model_service = ZImageModelService()
 
 @app.get("/")
 async def root():
+    health = model_service.get_health_snapshot()
     return {
         "service": "Z-Image Turbo Model Service",
-        "status": "success",
-        "model_loaded": model_service.pipe is not None,
+        "status": health["status"],
+        "model_loaded": health["model_loaded"],
         "device": DEVICE,
     }
 
 
 @app.get("/health")
 async def health_check():
+    health = model_service.get_health_snapshot()
     body = {
-        "status": "healthy" if model_service.pipe is not None else "unhealthy",
+        "status": health["status"],
         "timestamp": datetime.now().isoformat(),
         "device": DEVICE,
-        "model_loaded": model_service.pipe is not None,
-        "is_loading": model_service.is_loading,
+        "model_loaded": health["model_loaded"],
+        "is_loading": health["is_loading"],
+        "is_generating": health["is_generating"],
+        "active_generations": health["active_generations"],
     }
-    if model_service.last_error:
-        body["detail"] = model_service.last_error
+    if health["detail"]:
+        body["detail"] = health["detail"]
     return body
 
 
 @app.post("/generate", response_model=GenerateResponse)
 async def generate_image(request: GenerateRequest):
     try:
-        if model_service.pipe is None:
-            loaded = model_service.initialize(force=True)
-            if not loaded or model_service.pipe is None:
-                detail = model_service.last_error or "model is unavailable"
-                raise HTTPException(status_code=503, detail=f"Model not loaded: {detail}")
-
-        result = model_service.generate_image(request)
+        result = await asyncio.to_thread(model_service.generate_image, request)
         return GenerateResponse(**result)
     except HTTPException:
         raise
+    except RuntimeError as e:
+        if str(e).startswith("Model not loaded:"):
+            raise HTTPException(status_code=503, detail=str(e))
+        logger.error(f"Error on API: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error on API: {e}")
         raise HTTPException(status_code=500, detail=str(e))
