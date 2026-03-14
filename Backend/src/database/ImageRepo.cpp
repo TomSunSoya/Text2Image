@@ -19,8 +19,10 @@ namespace {
 
 constexpr const char* kColumns =
     "id, user_id, request_id, prompt, negative_prompt, num_steps, "
-    "height, width, seed, status, image_url, image_base64, error_message, "
-    "generation_time, created_at, completed_at";
+    "height, width, seed, status, retry_count, max_retries, failure_code, "
+    "worker_id, image_url, thumbnail_url, storage_key, image_base64, "
+    "error_message, generation_time, created_at, started_at, completed_at, "
+    "cancelled_at, lease_expires_at";
 
 std::mutex& dbSessionMutex()
 {
@@ -28,17 +30,25 @@ std::mutex& dbSessionMutex()
     return mutex;
 }
 
-std::string imageTableName()
+constexpr const char* kImageTable = "image_generations";
+
+std::string imageSchemaName()
 {
-    static const std::string tableName = [] {
+    static const std::string dbName = [] {
         const auto config = backend::loadConfig();
-        const auto dbName = config.at("database").at("database").get<std::string>();
-        if (dbName.empty()) {
+        const auto value = config.at("database").at("database").get<std::string>();
+        if (value.empty()) {
             throw std::runtime_error("database.database is empty in config.json");
         }
-        return "`" + dbName + "`.`image_generations`";
+        return value;
     }();
 
+    return dbName;
+}
+
+std::string imageTableName()
+{
+    static const std::string tableName = "`" + imageSchemaName() + "`.`" + std::string(kImageTable) + "`";
     return tableName;
 }
 
@@ -85,6 +95,35 @@ std::optional<std::chrono::system_clock::time_point> parseDbTime(std::string val
     return std::chrono::system_clock::from_time_t(asTimeT);
 }
 
+mysqlx::Value optionalTimeToValue(const std::optional<std::chrono::system_clock::time_point>& value)
+{
+    return value.has_value() ? mysqlx::Value(timeToDbString(*value)) : mysqlx::Value();
+}
+
+bool columnExists(const std::string& schemaName, const std::string& tableName, const std::string& columnName)
+{
+    auto result = database::DBManager::session().sql(
+        "SELECT COUNT(*) FROM information_schema.columns "
+        "WHERE table_schema = ? AND table_name = ? AND column_name = ?")
+        .bind(schemaName, tableName, columnName)
+        .execute();
+
+    auto row = result.fetchOne();
+    return row && !row[0].isNull() && row[0].get<uint64_t>() > 0;
+}
+
+bool indexExists(const std::string& schemaName, const std::string& tableName, const std::string& indexName)
+{
+    auto result = database::DBManager::session().sql(
+        "SELECT COUNT(*) FROM information_schema.statistics "
+        "WHERE table_schema = ? AND table_name = ? AND index_name = ?")
+        .bind(schemaName, tableName, indexName)
+        .execute();
+
+    auto row = result.fetchOne();
+    return row && !row[0].isNull() && row[0].get<uint64_t>() > 0;
+}
+
 std::string getStringOrEmpty(const mysqlx::Row& row, int index)
 {
     return row[index].isNull() ? std::string{} : row[index].get<std::string>();
@@ -121,19 +160,37 @@ models::ImageGeneration rowToImageGeneration(const mysqlx::Row& row)
         image.seed = static_cast<int>(row[8].get<int64_t>());
     }
     image.status = getStringOrEmpty(row, 9);
-    image.image_url = getStringOrEmpty(row, 10);
-    image.image_base64 = getStringOrEmpty(row, 11);
-    image.error_message = getStringOrEmpty(row, 12);
-    image.generation_time = getDoubleOrDefault(row, 13, 0.0);
+    image.retry_count = getIntOrDefault(row, 10, 0);
+    image.max_retries = getIntOrDefault(row, 11, 3);
+    image.failure_code = getStringOrEmpty(row, 12);
+    image.worker_id = getStringOrEmpty(row, 13);
+    image.image_url = getStringOrEmpty(row, 14);
+    image.thumbnail_url = getStringOrEmpty(row, 15);
+    image.storage_key = getStringOrEmpty(row, 16);
+    image.image_base64 = getStringOrEmpty(row, 17);
+    image.error_message = getStringOrEmpty(row, 18);
+    image.generation_time = getDoubleOrDefault(row, 19, 0.0);
 
-    if (const auto createdAt = parseDbTime(getStringOrEmpty(row, 14))) {
+    if (const auto createdAt = parseDbTime(getStringOrEmpty(row, 20))) {
         image.created_at = *createdAt;
     } else {
         image.created_at = std::chrono::system_clock::now();
     }
 
-    if (const auto completedAt = parseDbTime(getStringOrEmpty(row, 15))) {
+    if (const auto startedAt = parseDbTime(getStringOrEmpty(row, 21))) {
+        image.started_at = startedAt;
+    }
+
+    if (const auto completedAt = parseDbTime(getStringOrEmpty(row, 22))) {
         image.completed_at = completedAt;
+    }
+
+    if (const auto cancelledAt = parseDbTime(getStringOrEmpty(row, 23))) {
+        image.cancelled_at = cancelledAt;
+    }
+
+    if (const auto leaseExpiresAt = parseDbTime(getStringOrEmpty(row, 24))) {
+        image.lease_expires_at = leaseExpiresAt;
     }
 
     return image;
@@ -164,7 +221,7 @@ std::vector<models::ImageGeneration> collectResultRows(mysqlx::SqlResult& result
 
 bool isTerminalStatus(const std::string& status)
 {
-    return status == "success" || status == "failed";
+    return status == "success" || status == "failed" || status == "cancelled" || status == "timeout";
 }
 
 } // namespace
@@ -174,6 +231,7 @@ void ImageRepo::ensureTable()
     static std::once_flag once;
     std::call_once(once, [] {
         try {
+            const auto schemaName = imageSchemaName();
             std::lock_guard<std::mutex> lock(dbSessionMutex());
             database::DBManager::session().sql(
                 "CREATE TABLE IF NOT EXISTS " + imageTableName() + R"(
@@ -188,21 +246,69 @@ void ImageRepo::ensureTable()
                     width INT DEFAULT NULL,
                     seed INT DEFAULT NULL,
                     status VARCHAR(20) DEFAULT NULL,
+                    retry_count INT NOT NULL DEFAULT 0,
+                    max_retries INT NOT NULL DEFAULT 3,
+                    failure_code VARCHAR(64) DEFAULT NULL,
+                    worker_id VARCHAR(128) DEFAULT NULL,
                     image_url VARCHAR(500) DEFAULT NULL,
+                    thumbnail_url VARCHAR(500) DEFAULT NULL,
+                    storage_key VARCHAR(255) DEFAULT NULL,
                     image_base64 LONGTEXT DEFAULT NULL,
                     error_message TEXT DEFAULT NULL,
                     generation_time DOUBLE DEFAULT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    started_at DATETIME DEFAULT NULL,
                     completed_at DATETIME DEFAULT NULL,
+                    cancelled_at DATETIME DEFAULT NULL,
+                    lease_expires_at DATETIME DEFAULT NULL,
                     INDEX idx_user_id (user_id),
                     INDEX idx_request_id (request_id),
-                    INDEX idx_created_at (created_at)
+                    INDEX idx_created_at (created_at),
+                    INDEX idx_status_created_at (status, created_at),
+                    INDEX idx_status_lease (status, lease_expires_at)
                 )
             )")
                 .execute();
+
+            const std::vector<std::pair<std::string, std::string>> columnMigrations = {
+                {"retry_count", "retry_count INT NOT NULL DEFAULT 0"},
+                {"max_retries", "max_retries INT NOT NULL DEFAULT 3"},
+                {"failure_code", "failure_code VARCHAR(64) DEFAULT NULL"},
+                {"worker_id", "worker_id VARCHAR(128) DEFAULT NULL"},
+                {"thumbnail_url", "thumbnail_url VARCHAR(500) DEFAULT NULL"},
+                {"storage_key", "storage_key VARCHAR(255) DEFAULT NULL"},
+                {"started_at", "started_at DATETIME DEFAULT NULL"},
+                {"cancelled_at", "cancelled_at DATETIME DEFAULT NULL"},
+                {"lease_expires_at", "lease_expires_at DATETIME DEFAULT NULL"}
+            };
+
+            for (const auto& [columnName, definition] : columnMigrations) {
+                if (columnExists(schemaName, kImageTable, columnName)) {
+                    continue;
+                }
+
+                database::DBManager::session().sql(
+                    "ALTER TABLE " + imageTableName() + " ADD COLUMN " + definition)
+                    .execute();
+            }
+
+            const std::vector<std::pair<std::string, std::string>> indexMigrations = {
+                {"idx_status_created_at", "ADD INDEX idx_status_created_at (status, created_at)"},
+                {"idx_status_lease", "ADD INDEX idx_status_lease (status, lease_expires_at)"}
+            };
+
+            for (const auto& [indexName, definition] : indexMigrations) {
+                if (indexExists(schemaName, kImageTable, indexName)) {
+                    continue;
+                }
+
+                database::DBManager::session().sql(
+                    "ALTER TABLE " + imageTableName() + " " + definition)
+                    .execute();
+            }
         } catch (const mysqlx::Error& ex) {
             spdlog::error("ImageRepo::ensureTable mysqlx error: {}", ex.what());
-            throw std::runtime_error(std::string("failed to create image_generations table: ") + ex.what());
+            throw std::runtime_error(std::string("failed to initialize image_generations table: ") + ex.what());
         }
     });
 }
@@ -216,21 +322,17 @@ int64_t ImageRepo::insert(const models::ImageGeneration& generation)
         createdAt = std::chrono::system_clock::now();
     }
 
-    mysqlx::Value seedValue = generation.seed.has_value()
-        ? mysqlx::Value(generation.seed.value())
-        : mysqlx::Value();
-    mysqlx::Value completedAtValue = generation.completed_at.has_value()
-        ? mysqlx::Value(timeToDbString(generation.completed_at.value()))
-        : mysqlx::Value();
+    mysqlx::Value seedValue = generation.seed.has_value() ? mysqlx::Value(generation.seed.value()) : mysqlx::Value();
 
     std::lock_guard<std::mutex> lock(dbSessionMutex());
 
     database::DBManager::session().sql(
         "INSERT INTO " + imageTableName() + R"(
-            (user_id, request_id, prompt, negative_prompt, num_steps,
-             height, width, seed, status, image_url, image_base64,
-             error_message, generation_time, created_at, completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (user_id, request_id, prompt, negative_prompt, num_steps, height, width,
+             seed, status, retry_count, max_retries, failure_code, worker_id, image_url,
+             thumbnail_url, storage_key, image_base64, error_message, generation_time,
+             created_at, started_at, completed_at, cancelled_at, lease_expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         )")
         .bind(generation.user_id,
               generation.request_id,
@@ -241,12 +343,21 @@ int64_t ImageRepo::insert(const models::ImageGeneration& generation)
               generation.width,
               seedValue,
               generation.status,
+              generation.retry_count,
+              generation.max_retries,
+              generation.failure_code,
+              generation.worker_id,
               generation.image_url,
+              generation.thumbnail_url,
+              generation.storage_key,
               generation.image_base64,
               generation.error_message,
               generation.generation_time,
               timeToDbString(createdAt),
-              completedAtValue)
+              optionalTimeToValue(generation.started_at),
+              optionalTimeToValue(generation.completed_at),
+              optionalTimeToValue(generation.cancelled_at),
+              optionalTimeToValue(generation.lease_expires_at))
         .execute();
 
     auto idResult = database::DBManager::session().sql("SELECT LAST_INSERT_ID()").execute();
@@ -365,6 +476,169 @@ bool ImageRepo::deleteByIdAndUserId(int64_t id, int64_t userId)
     return result.getAffectedItemsCount() > 0;
 }
 
+std::optional<models::ImageGeneration> ImageRepo::findByRequestIdAndUserId(const std::string& requestId, int64_t userId)
+{
+	ensureTable();
+
+	std::lock_guard<std::mutex> lock(dbSessionMutex());
+    auto result = database::DBManager::session().sql(
+        std::string("SELECT ") + kColumns +
+        " FROM " + imageTableName() + " WHERE request_id = ? AND user_id = ?")
+        .bind(requestId, userId)
+        .execute();
+
+    auto row = result.fetchOne();
+    if (!row) {
+        return std::nullopt;
+    }
+
+    return rowToImageGeneration(row);
+}
+
+std::optional<models::ImageGeneration> ImageRepo::claimNextTask(const std::string& workerId, long leaseSeconds)
+{
+    ensureTable();
+
+    const auto now = std::chrono::system_clock::now();
+    const auto expiresAt = now + std::chrono::seconds(leaseSeconds <= 0 ? 300 : leaseSeconds);
+    const auto nowText = timeToDbString(now);
+    const auto expiresAtText = timeToDbString(expiresAt);
+
+    std::lock_guard<std::mutex> lock(dbSessionMutex());
+
+    auto select = database::DBManager::session().sql(
+        std::string("SELECT ") + kColumns +
+        " FROM " + imageTableName() +
+        " WHERE status IN ('queued', 'pending') "
+        "    OR (status = 'generating' AND (lease_expires_at IS NULL OR lease_expires_at < ?)) "
+        " ORDER BY created_at ASC, id ASC LIMIT 1")
+        .bind(nowText)
+        .execute();
+
+    auto row = select.fetchOne();
+    if (!row) {
+        return std::nullopt;
+    }
+
+    auto task = rowToImageGeneration(row);
+    auto update = database::DBManager::session().sql(
+        "UPDATE " + imageTableName() +
+        " SET status = 'generating', worker_id = ?, started_at = IFNULL(started_at, ?), lease_expires_at = ?, failure_code = '', error_message = ''"
+        " WHERE id = ? AND (status IN ('queued', 'pending') OR (status = 'generating' AND (lease_expires_at IS NULL OR lease_expires_at < ?)))")
+        .bind(workerId, nowText, expiresAtText, task.id, nowText)
+        .execute();
+
+    if (update.getAffectedItemsCount() == 0) {
+        return std::nullopt;
+    }
+
+    task.status = "generating";
+    task.worker_id = workerId;
+    if (!task.started_at.has_value()) {
+        task.started_at = now;
+    }
+
+    task.lease_expires_at = expiresAt;
+    task.failure_code.clear();
+    task.error_message.clear();
+    return task;
+}
+
+bool ImageRepo::finishClaimedTask(const models::ImageGeneration& generation)
+{
+    ensureTable();
+
+    std::lock_guard<std::mutex> lock(dbSessionMutex());
+    auto result = database::DBManager::session().sql(
+        "UPDATE " + imageTableName() +
+        " SET status = ?, image_url = ?, image_base64 = ?, error_message = ?, generation_time = ?, completed_at = ?, cancelled_at = ?,"
+        " failure_code = ?, thumbnail_url = ?, storage_key = ?, lease_expires_at = NULL, worker_id = NULL "
+        " WHERE id = ? AND user_id = ? AND status = 'generating' AND worker_id = ?")
+        .bind(generation.status,
+              generation.image_url,
+              generation.image_base64,
+              generation.error_message,
+              generation.generation_time,
+              optionalTimeToValue(generation.completed_at),
+              optionalTimeToValue(generation.cancelled_at),
+              generation.failure_code,
+              generation.thumbnail_url,
+              generation.storage_key,
+              generation.id,
+              generation.user_id)
+        .bind(generation.worker_id)
+        .execute();
+
+    return result.getAffectedItemsCount() > 0;
+}
+
+bool ImageRepo::cancelByIdAndUserId(int64_t id, int64_t userId, models::ImageGeneration* updated)
+{
+    ensureTable();
+
+    const auto nowText = timeToDbString(std::chrono::system_clock::now());
+
+    std::lock_guard<std::mutex> lock(dbSessionMutex());
+    auto result = database::DBManager::session().sql(
+        "UPDATE " + imageTableName() +
+        " SET status = 'cancelled', cancelled_at = ?, lease_expires_at = NULL, worker_id = NULL "
+        "   , error_message = '', failure_code = '', completed_at = ?"
+        " WHERE id = ? AND user_id = ? AND status IN ('queued', 'pending', 'generating')")
+        .bind(nowText, nowText, id, userId)
+        .execute();
+
+    if (result.getAffectedItemsCount() == 0) {
+        return false;
+    }
+
+    if (updated) {
+        auto select = database::DBManager::session().sql(
+            std::string("SELECT ") + kColumns +
+            " FROM " + imageTableName() + " WHERE id = ? AND user_id = ?")
+            .bind(id, userId)
+            .execute();
+
+        auto row = select.fetchOne();
+        if (row)
+            *updated = rowToImageGeneration(row);
+    }
+    return true;
+}
+
+bool ImageRepo::retryByIdAndUserId(int64_t id, int64_t userId, models::ImageGeneration* updated)
+{
+    ensureTable();
+
+    std::lock_guard<std::mutex> lock(dbSessionMutex());
+    auto result = database::DBManager::session().sql(
+        "UPDATE " + imageTableName() +
+        " SET status = 'queued', retry_count = retry_count + 1, failure_code = '', error_message = '', "
+        " image_url = '', thumbnail_url = '', storage_key = '', image_base64 = '', generation_time = 0, "
+        " worker_id = NULL, lease_expires_at = NULL, started_at = NULL, completed_at = NULL, cancelled_at = NULL "
+        " WHERE id = ? AND user_id = ? AND status IN ('failed', 'timeout', 'cancelled') AND retry_count < max_retries")
+        .bind(id, userId)
+        .execute();
+
+    if (result.getAffectedItemsCount() == 0) {
+        return false;
+    }
+
+    if (updated) {
+        auto select = database::DBManager::session().sql(
+            std::string("SELECT ") + kColumns +
+            " FROM " + imageTableName() + " WHERE id = ? AND user_id = ?")
+            .bind(id, userId)
+            .execute();
+
+        auto row = select.fetchOne();
+        if (row) {
+            *updated = rowToImageGeneration(row);
+        }
+    }
+
+    return true;
+}
+
 bool ImageRepo::updateStatusAndError(int64_t id,
                                      int64_t userId,
                                      const std::string& status,
@@ -394,6 +668,9 @@ bool ImageRepo::updateGenerationResult(
     const std::string& imageBase64,
     const std::string& errorMessage,
     double generationTime,
+    const std::string& failureCode,
+    const std::string& thumbnailUrl,
+    const std::string& storageKey,
     const std::optional<std::chrono::system_clock::time_point>& completedAt)
 {
     ensureTable();
@@ -406,12 +683,16 @@ bool ImageRepo::updateGenerationResult(
     auto result = database::DBManager::session().sql(
         "UPDATE " + imageTableName() +
         " SET status = ?, image_url = ?, image_base64 = ?, error_message = ?, "
-        " generation_time = ?, completed_at = ? WHERE id = ? AND user_id = ?")
+        " generation_time = ?, failure_code = ?, thumbnail_url = ?, storage_key = ?, completed_at = ?"
+        " WHERE id = ? AND user_id = ?")
         .bind(status,
               imageUrl,
               imageBase64,
               errorMessage,
               generationTime,
+              failureCode,
+              thumbnailUrl,
+              storageKey,
               completedAtValue,
               id,
               userId)

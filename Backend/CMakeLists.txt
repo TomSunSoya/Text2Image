@@ -17,6 +17,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 if (MSVC)
     add_compile_options(/W4)
+    # 启用多核并行编译
+    add_compile_options(/MP)
 else()
     add_compile_options(-Wall -Wextra -O2)
 endif()

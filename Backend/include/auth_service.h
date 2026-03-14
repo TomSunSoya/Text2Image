@@ -7,11 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include "user.h"
-
-struct ServiceError {
-    drogon::HttpStatusCode status{drogon::k500InternalServerError};
-    std::string message{"internal error"};
-};
+#include "service_error.h"
 
 struct RegisterResult {
     models::User user;

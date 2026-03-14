@@ -24,6 +24,13 @@ public:
     std::optional<models::ImageGeneration> findByIdAndUserId(int64_t id, int64_t userId);
     bool deleteByIdAndUserId(int64_t id, int64_t userId);
 
+	std::optional<models::ImageGeneration> findByRequestIdAndUserId(const std::string& requestId, int64_t userId);
+	std::optional<models::ImageGeneration> claimNextTask(const std::string& workerId, long leaseSeconds);
+
+	bool finishClaimedTask(const models::ImageGeneration& generation);
+	bool cancelByIdAndUserId(int64_t id, int64_t userId, models::ImageGeneration *updated = nullptr);
+	bool retryByIdAndUserId(int64_t id, int64_t userId, models::ImageGeneration* updated = nullptr);
+
     bool updateStatusAndError(int64_t id,
                               int64_t userId,
                               const std::string& status,
@@ -36,7 +43,10 @@ public:
                                 const std::string& imageBase64,
                                 const std::string& errorMessage,
                                 double generationTime,
-                                const std::optional<std::chrono::system_clock::time_point>& completedAt);
+                                const std::string& failureCode = std::string{},
+                                const std::string& thumbnailUrl = std::string{},
+                                const std::string& storageKey = std::string{},
+                                const std::optional<std::chrono::system_clock::time_point>& completedAt = std::nullopt);
 
 private:
     static void ensureTable();

@@ -10,6 +10,7 @@ std::optional<RegisterResult> AuthService::registerUser(const nlohmann::json& pa
     models::User user = models::User::fromJson(payload);
     if (!user.validate()) {
         error.status = drogon::k400BadRequest;
+        error.code = "invalid_user_data";
         error.message = "invalid user data";
         return std::nullopt;
     }
@@ -17,12 +18,14 @@ std::optional<RegisterResult> AuthService::registerUser(const nlohmann::json& pa
     UserRepo repo;
     if (repo.existsByUsername(user.username)) {
         error.status = drogon::k409Conflict;
+        error.code = "username_exists";
         error.message = "username already exists";
         return std::nullopt;
     }
 
     if (repo.existsByEmail(user.email)) {
         error.status = drogon::k409Conflict;
+        error.code = "email_exists";
         error.message = "email already exists";
         return std::nullopt;
     }
@@ -41,6 +44,7 @@ std::optional<LoginResult> AuthService::login(const nlohmann::json& payload, Ser
     if (password.empty() || (username.empty() && email.empty())) {
         error.status = drogon::k400BadRequest;
         error.message = "missing credentials";
+		error.code = "missing_credentials";
         return std::nullopt;
     }
 
@@ -56,6 +60,7 @@ std::optional<LoginResult> AuthService::login(const nlohmann::json& payload, Ser
     if (!user || !security::verifyPassword(password, user->password)) {
         error.status = drogon::k401Unauthorized;
         error.message = "invalid username or password";
+		error.code = "invalid_credentials";
         return std::nullopt;
     }
 

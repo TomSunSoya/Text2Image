@@ -13,9 +13,52 @@ namespace models {
         return ss.str();
     }
 
-    nlohmann::json ImageGeneration::toJson() const {
+    static void putOptionalTime(nlohmann::json& j, const char* key, const std::optional<std::chrono::system_clock::time_point>& value) {
+        if (value.has_value())
+            j[key] = timeToString(*value);
+    }
+
+    static std::optional<std::string> readStringAny(const nlohmann::json& j, std::initializer_list<const char*> keys) {
+        for (const auto* key : keys) {
+			if (j.contains(key) && j[key].is_string()) {
+                return j[key].get<std::string>();
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    static std::optional<int> readIntAny(const nlohmann::json& j, std::initializer_list<const char*> keys) {
+        for (const auto* key : keys) {
+            if (j.contains(key) && j[key].is_number_integer())
+                return j[key].get<int>();
+        }
+
+        return std::nullopt;
+    }
+
+    static std::optional<int64_t> readInt64_tAny(const nlohmann::json& j, std::initializer_list<const char*> keys) {
+        for (const auto *key : keys) {
+            if (j.contains(key) && j[key].is_number_integer())
+                return j[key].get<int64_t>();
+		}
+
+        return std::nullopt;
+    }
+
+    static std::optional<double> readDoubleAny(const nlohmann::json& j, std::initializer_list<const char*> keys) {
+        for (const auto* key : keys) {
+            if (j.contains(key) && j[key].is_number())
+                return j[key].get<double>();
+        }
+
+        return std::nullopt;
+	}
+
+    nlohmann::json ImageGeneration::toJson(bool includeImagePayload) const {
         nlohmann::json j = {
             {"id", id},
+            {"taskId", id},
             {"requestId", request_id},
             {"prompt", prompt},
             {"negativePrompt", negative_prompt},
@@ -23,41 +66,63 @@ namespace models {
             {"height", height},
             {"width", width},
             {"status", status},
+            {"retryCount", retry_count},
+            {"maxRetries", max_retries},
+            {"failureCode", failure_code},
+            {"workerId", worker_id},
             {"imageUrl", image_url},
             {"imageBase64", image_base64},
             {"errorMessage", error_message},
             {"generationTime", generation_time},
-            {"createdAt", timeToString(created_at)}
+            {"createdAt", timeToString(created_at)},
+            {"thumbnail_url", thumbnail_url},
+			{"storageKey", storage_key}
         };
 
         if (seed.has_value()) {
             j["seed"] = seed.value();
         }
 
-        if (completed_at.has_value()) {
-            j["completedAt"] = timeToString(completed_at.value());
+		if (includeImagePayload && !image_base64.empty()) {
+            j["imageBase64"] = image_base64;
         }
 
+		putOptionalTime(j, "startedAt", started_at);
+		putOptionalTime(j, "completedAt", completed_at);
+		putOptionalTime(j, "cancelledAt", cancelled_at);
+		putOptionalTime(j, "leaseExpiresAt", lease_expires_at);
+
         return j;
+    }
+
+    bool ImageGeneration::isTerminal() const
+    {
+        return status == "success" || status == "failed" || status == "cancelled" || status == "timeout";
     }
 
     ImageGeneration ImageGeneration::fromJson(const nlohmann::json& j) {
         ImageGeneration img;
 
-        if (j.contains("id")) img.id = j["id"].get<int64_t>();
-        if (j.contains("user_id")) img.user_id = j["user_id"].get<int64_t>();
-        if (j.contains("request_id")) img.request_id = j["request_id"].get<std::string>();
-        if (j.contains("prompt")) img.prompt = j["prompt"].get<std::string>();
-        if (j.contains("negativePrompt")) img.negative_prompt = j["negativePrompt"].get<std::string>();
-        if (j.contains("numSteps")) img.num_steps = j["numSteps"].get<int>();
-        if (j.contains("height")) img.height = j["height"].get<int>();
-        if (j.contains("width")) img.width = j["width"].get<int>();
-        if (j.contains("seed") && !j["seed"].is_null()) img.seed = j["seed"].get<int>();
-        if (j.contains("status")) img.status = j["status"].get<std::string>();
-        if (j.contains("image_url")) img.image_url = j["image_url"].get<std::string>();
-        if (j.contains("imageBase64")) img.image_base64 = j["imageBase64"].get<std::string>();
-        if (j.contains("errorMessage")) img.error_message = j["errorMessage"].get<std::string>();
-        if (j.contains("generationTime")) img.generation_time = j["generationTime"].get<double>();
+        if (const auto value = readInt64_tAny(j, { "id", "taskId" })) img.id = *value;
+        if (const auto value = readInt64_tAny(j, { "user_id", "userId" })) img.user_id = *value;
+        if (const auto value = readStringAny(j, { "request_id", "requestId" })) img.request_id = *value;
+        if (const auto value = readStringAny(j, { "prompt" })) img.prompt = *value;
+        if (const auto value = readStringAny(j, { "negative_prompt", "negativePrompt" })) img.negative_prompt = *value;
+        if (const auto value = readIntAny(j, { "num_steps", "numSteps" })) img.num_steps = *value;
+        if (const auto value = readIntAny(j, { "height" })) img.height = *value;
+        if (const auto value = readIntAny(j, { "width" })) img.width = *value;
+        if (const auto value = readIntAny(j, { "seed" })) img.seed = *value;
+        if (const auto value = readStringAny(j, { "status" })) img.status = *value;
+        if (const auto value = readStringAny(j, { "image_url", "imageUrl" })) img.image_url = *value;
+        if (const auto value = readStringAny(j, { "thumbnail_url", "thumbnailUrl" })) img.thumbnail_url = *value;
+        if (const auto value = readStringAny(j, { "storage_key", "storeage_key", "storageKey" })) img.storage_key = *value;
+        if (const auto value = readStringAny(j, { "image_base64", "imageBase64" })) img.image_base64 = *value;
+        if (const auto value = readStringAny(j, { "error_message", "errorMessage" })) img.error_message = *value;
+        if (const auto value = readDoubleAny(j, { "generation_time", "generationTime" })) img.generation_time = *value;
+        if (const auto value = readIntAny(j, { "retry_count", "retryCount" })) img.retry_count = *value;
+        if (const auto value = readIntAny(j, { "max_retries", "maxRetries" })) img.max_retries = *value;
+        if (const auto value = readStringAny(j, { "failure_code", "failureCode" })) img.failure_code = *value;
+        if (const auto value = readStringAny(j, { "worker_id", "workerId" })) img.worker_id = *value;
 
         return img;
     }
