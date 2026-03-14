@@ -1,112 +1,153 @@
-# ZImage Workspace（总览）
+# ZImage Workspace
 
-## 1. 项目范围
-本 README 对应当前主链路：
-- `ZImageFrontend/`：前端（Vue 3 + Vite + Element Plus）
-- `Backend/`：后端（C++20 + Drogon + MySQL）
-- `PythonProject/`：模型服务（FastAPI + Diffusers）
+## 1. Scope
+This repository currently includes the main delivery path:
+- `ZImageFrontend/`: frontend, built with Vue 3 + Vite + Element Plus
+- `Backend/`: backend API and task orchestration, built with C++20 + Drogon + MySQL
+- `ModelService/`: model execution service, built with FastAPI + Diffusers
 
-不在本文档范围内：
+Out of scope:
 - `PythonProject1/`
 - `ZImageBackend/`
 
-## 2. 架构与调用链
-整体是三层结构：
+## 2. Architecture
+The system is split into three layers:
 
-1. 前端 `ZImageFrontend` 调用 `/api/*`
-2. 后端 `Backend` 提供鉴权、历史记录、任务状态，并转发模型生成请求
-3. Python 服务 `PythonProject` 执行模型推理并返回结果
+1. `ZImageFrontend` only talks to `Backend`
+2. `Backend` owns auth, task lifecycle, history, storage metadata, and model-service orchestration
+3. `ModelService` focuses on model execution and execution health
 
-默认端口约定：
-- 前端开发服务：`3000`
-- 后端 API：`8080`
-- Python 模型服务：`8081`
+Default ports:
+- frontend: `3000`
+- backend: `8080`
+- model service: `8081`
 
-主流程（生成图片）：
+## 3. Main Flow
+Image generation currently works like this:
 
-1. 前端 `POST /api/images`
-2. 后端入库状态为 `queued`，进入异步队列
-3. 后端 worker 调 Python `POST /generate`
-4. Python 返回 `image_url`（后端可转成 `imageBase64`）
-5. 后端更新 MySQL 状态（`success/failed`）
-6. 前端轮询 `GET /api/images/{id}/status` 展示结果
+1. frontend sends `POST /api/images`
+2. backend creates a task in MySQL with status `queued`
+3. backend workers claim queued tasks and call `POST /generate` on `ModelService`
+4. `ModelService` generates the image and returns result metadata
+5. backend persists task status, timing, storage metadata, and history
+6. frontend polls `GET /api/images/{id}/status` and lazily loads the final image payload
 
-## 3. 核心能力
+## 4. Current Capabilities
 
-### 3.1 认证与用户
-- 注册：`POST /api/auth/register`
-- 登录：`POST /api/auth/login`
-- 登录后使用 Bearer Token 访问图片接口
+### 4.1 Auth
+- register: `POST /api/auth/register`
+- login: `POST /api/auth/login`
+- authenticated image APIs use Bearer token
 
-### 3.2 图片生成与历史
-- 创建任务：`POST /api/images`
-- 我的历史：`GET /api/images/my-list`
-- 按状态筛选：`GET /api/images/my-list/status/{status}`
-- 查询详情：`GET /api/images/{id}`
-- 查询状态：`GET /api/images/{id}/status`
-- 删除记录：`DELETE /api/images/{id}`
+### 4.2 Image Tasks
+- create task: `POST /api/images`
+- list current user tasks: `GET /api/images/my-list`
+- list by status: `GET /api/images/my-list/status/{status}`
+- get task detail: `GET /api/images/{id}`
+- get task status: `GET /api/images/{id}/status`
+- cancel task: `POST /api/images/{id}/cancel`
+- retry task: `POST /api/images/{id}/retry`
+- download protected image binary: `GET /api/images/{id}/binary`
+- delete task record: `DELETE /api/images/{id}`
 
-历史记录已使用 MySQL 持久化，非内存临时存储。
+Canonical task statuses currently used across the stack:
+- `queued`
+- `pending`
+- `generating`
+- `success`
+- `failed`
+- `cancelled`
+- `timeout`
 
-### 3.3 健康检查
-- 后端自身：`GET /health`
-- 后端代理模型健康：`GET /api/images/health`
-- Python 模型健康：`GET /health`（运行在 8081）
+### 4.3 Health
+- backend liveness: `GET /health`
+- backend proxy model health: `GET /api/images/health`
+- model service health: `GET http://localhost:8081/health`
 
-## 4. 目录说明
-- `ZImageFrontend/src/`：页面、组件、路由、Pinia、API 封装
-- `Backend/src/controllers/`：HTTP 接口层
-- `Backend/src/services/`：业务逻辑、异步队列、外部调用
-- `Backend/src/database/`：MySQL 访问与仓储
-- `PythonProject/model_service.py`：FastAPI 模型服务入口
-- `PythonProject/start_model_service.py`：模型服务启动脚本
+`ModelService` health now distinguishes:
+- `healthy`: model loaded and idle
+- `busy`: model loaded and currently generating
+- `loading`: process is alive but model is still loading
+- `unhealthy`: model unavailable or failed to load
 
-## 5. 快速启动（开发）
-建议按顺序启动：
+## 5. Repository Layout
+- `ZImageFrontend/src/`: pages, components, router, Pinia stores, API wrappers
+- `Backend/src/controllers/`: HTTP controllers
+- `Backend/src/services/`: business logic, task engine, external-service calls
+- `Backend/src/database/`: MySQL access and repositories
+- `Backend/src/models/`: task and storage-related data models
+- `ModelService/model_service.py`: FastAPI model-service entrypoint
+- `ModelService/main.py`: local standalone model script
+- `plan.md`: long-term optimization plan for the full stack
 
+## 6. Quick Start
+Start the services in this order.
+
+### 6.1 Model Service
 ```powershell
-# 1) 启动 Python 模型服务（默认 8081）
-cd C:\Users\pc1\PycharmProjects\PythonProject
-python start_model_service.py
+cd D:\project\Text2Image\ModelService
+python model_service.py
 ```
 
+### 6.2 Backend
 ```powershell
-# 2) 构建并启动 C++ 后端（8080）
-cd C:\Users\pc1\PycharmProjects\Backend
+cd D:\project\Text2Image\Backend
 cmake --preset x64-debug
 cmake --build out\build\x64-debug --config Debug
 .\out\build\x64-debug\Debug\Backend.exe
 ```
 
+### 6.3 Frontend
 ```powershell
-# 3) 启动前端（3000）
-cd C:\Users\pc1\PycharmProjects\ZImageFrontend
+cd D:\project\Text2Image\ZImageFrontend
 npm install
 npm run dev
 ```
 
-## 6. 配置说明
+## 7. Configuration
 
-### 6.1 Backend
-- 配置文件：`Backend/config.json`
-- 支持环境变量覆盖（示例）：
-  - `BACKEND_PORT`
-  - `DB_HOST` `DB_PORT` `DB_USERNAME` `DB_PASSWORD` `DB_NAME`
-  - `JWT_SECRET`
-  - `PYTHON_SERVICE_URL` `PYTHON_SERVICE_TIMEOUT_SECONDS`
+### 7.1 Backend
+Primary file:
+- `Backend/config.json`
 
-### 6.2 PythonProject
-- 关键环境变量：
-  - `MODEL_SERVICE_PORT`（默认 8081）
-  - `MODEL_PATH`（本地模型路径）
-  - `MODEL_SERVICE_ALLOW_ORIGINS`
+Important settings:
+- `server`: host, port, thread count
+- `database`: MySQL connection and pool settings
+- `jwt`: secret and token expiration
+- `python_service`: model-service URL and execution timeout
+- `task_engine`: worker count, polling, lease, retry policy
+- `storage`: local image storage settings
 
-## 7. 当前状态（摘要）
-- 前后端与模型服务链路已打通。
-- 图片历史已持久化到 MySQL。
-- 前端已支持异步轮询与状态展示。
-- 适合继续做生产化增强（任务持久队列、对象存储、可观测性、限流等）。
+Environment-variable overrides are supported in the backend for common settings such as:
+- `BACKEND_PORT`
+- `DB_HOST` `DB_PORT` `DB_USERNAME` `DB_PASSWORD` `DB_NAME`
+- `JWT_SECRET`
+- `PYTHON_SERVICE_URL` `PYTHON_SERVICE_TIMEOUT_SECONDS`
 
-## 8. 安全提示
-- 不要在仓库提交真实密钥/密码。
-- `config.json` 中的敏感字段建议仅作本地开发占位，生产环境务必使用环境变量。
+### 7.2 Model Service
+Key environment variables:
+- `MODEL_SERVICE_PORT`
+- `MODEL_PATH`
+- `MODEL_SERVICE_ALLOW_ORIGINS`
+- `MODEL_SERVICE_LOG_DIR`
+- `MODEL_SERVICE_TEMP_DIR`
+
+## 8. Current State
+What is already in place:
+- frontend, backend, and model service are connected end to end
+- backend task state is persisted in MySQL
+- frontend supports polling, history, status filtering, cancel, retry, and protected download
+- model service health remains responsive during generation
+- image binaries are no longer required to be eagerly loaded in list responses
+
+What is not yet finished:
+- standardized automated tests across all three projects
+- production-grade secrets/config management
+- structured observability and metrics
+- deployment packaging and one-command local bootstrap
+- stronger request validation and operational runbooks
+
+## 9. Security Notes
+- do not commit real secrets or production passwords
+- treat `Backend/config.json` as local-development configuration only
+- move credentials and secrets to environment variables before any shared or deployed usage
