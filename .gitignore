@@ -1,0 +1,62 @@
+# OS / IDE
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+**/logs/
+
+# Local env / secrets
+.env
+.env.*
+*.local
+*.secret
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+PythonProject/temp/
+PythonProject/lora_output/
+PythonProject/training_images/
+PythonProject/outputs/
+PythonProject/generated/
+PythonProject/results/
+PythonProject/**/*.png
+PythonProject/**/*.jpg
+PythonProject/**/*.jpeg
+PythonProject/**/*.gif
+PythonProject/**/*.webp
+PythonProject/**/*.bmp
+
+# Java / Maven
+**/target/
+
+# Node / Vite
+**/node_modules/
+**/dist/
+**/.vite/
+
+# C++ / CMake
+**/build/
+**/out/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/compile_commands.json
+**/*.obj
+**/*.o
+**/*.pdb
+**/*.ilk
+
