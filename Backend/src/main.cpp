@@ -4,6 +4,7 @@
 
 #include "Backend.h"
 #include "db_manager.h"
+#include "image_service.h"
 
 int main()
 {
@@ -21,6 +22,7 @@ int main()
 
         try {
             database::DBManager::init(mysqlConfig);
+			ImageService::bootstrapWorkers();
             spdlog::info("Database initialized: {}:{}", mysqlConfig.host, mysqlConfig.port);
         } catch (const std::exception& e) {
             spdlog::warn("Database initialization failed: {}", e.what());
