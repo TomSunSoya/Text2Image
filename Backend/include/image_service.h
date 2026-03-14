@@ -23,6 +23,11 @@ struct ImageGetResult {
     models::ImageGeneration generation;
 };
 
+struct ImageBinaryResult {
+    std::string body;
+    std::string content_type{ "image/png" };
+};
+
 struct ImageHealthResult {
     std::string status{"unhealthy"};
     bool model_loaded{false};
@@ -31,6 +36,8 @@ struct ImageHealthResult {
 
 class ImageService {
 public:
+	static void bootstrapWorkers();
+
     std::optional<ImageCreateResult> create(int64_t userId,
                                             const nlohmann::json& payload,
                                             ServiceError& error) const;
@@ -42,7 +49,11 @@ public:
                                                   int size,
                                                   ServiceError& error) const;
 
-    std::optional<ImageGetResult> getById(int64_t userId, int64_t id, ServiceError& error) const;
+    std::optional<ImageGetResult> getById(int64_t userId, int64_t id, ServiceError& error, bool includeImagePayload = true) const;
+	std::optional<ImageGetResult> cancelById(int64_t userId, int64_t id, ServiceError& error) const;
+	std::optional<ImageGetResult> retryById(int64_t userId, int64_t id, ServiceError& error) const;
+	std::optional<ImageBinaryResult> getBinaryById(int64_t userId, int64_t id, ServiceError& error) const;
+
     bool deleteById(int64_t userId, int64_t id, ServiceError& error) const;
 
     ImageHealthResult checkHealth() const;

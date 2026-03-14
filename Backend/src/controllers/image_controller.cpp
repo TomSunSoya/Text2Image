@@ -54,6 +54,10 @@ nlohmann::json toStatusJson(const models::ImageGeneration& generation)
         body["errorMessage"] = full.at("errorMessage");
     }
 
+    if (full.contains("failureCode") && full.at("failureCode").is_string() && !full.at("failureCode").get<std::string>().empty()) {
+        body["failureCode"] = full.at("failureCode");
+    }
+
     if (full.contains("generationTime")) {
         body["generationTime"] = full.at("generationTime");
     }
@@ -80,7 +84,19 @@ nlohmann::json toStatusJson(const models::ImageGeneration& generation)
 void fillServiceError(const drogon::HttpResponsePtr& resp, const ServiceError& error)
 {
     resp->setStatusCode(error.status);
-    resp->setBody(nlohmann::json{{"error", error.message}}.dump());
+    resp->setBody(nlohmann::json{{"error", error.toJson()}}.dump());
+}
+
+void fillDirectError(const drogon::HttpResponsePtr& resp,
+                     drogon::HttpStatusCode status,
+                     std::string code,
+                     std::string message)
+{
+    ServiceError error;
+    error.status = status;
+    error.code = std::move(code);
+    error.message = std::move(message);
+    fillServiceError(resp, error);
 }
 
 std::optional<int64_t> resolveUserId(const drogon::HttpRequestPtr& req,
@@ -88,15 +104,13 @@ std::optional<int64_t> resolveUserId(const drogon::HttpRequestPtr& req,
 {
     const auto token = utils::extractBearerToken(req);
     if (!token) {
-        resp->setStatusCode(drogon::k401Unauthorized);
-        resp->setBody(R"({"error":"missing bearer token"})");
+        fillDirectError(resp, drogon::k401Unauthorized, "missing_bearer_token", "missing bearer token");
         return std::nullopt;
     }
 
     const auto payload = utils::verifyToken(*token);
     if (!payload || payload->user_id <= 0) {
-        resp->setStatusCode(drogon::k401Unauthorized);
-        resp->setBody(R"({"error":"invalid token"})");
+        fillDirectError(resp, drogon::k401Unauthorized, "invalid_token", "invalid token");
         return std::nullopt;
     }
 
@@ -154,17 +168,15 @@ void ImageController::create(const drogon::HttpRequestPtr& req,
         }
 
         resp->setStatusCode(drogon::k202Accepted);
-        resp->setBody(result->generation.toJson().dump());
+        resp->setBody(result->generation.toJson(false).dump());
         callback(resp);
     } catch (const json::parse_error& e) {
         spdlog::error("ImageController::create parse error: {}", e.what());
-        resp->setStatusCode(drogon::k400BadRequest);
-        resp->setBody(R"({"error":"invalid json body"})");
+        fillDirectError(resp, drogon::k400BadRequest, "invalid_json_body", "invalid json body");
         callback(resp);
     } catch (const std::exception& e) {
         spdlog::error("ImageController::create error: {}", e.what());
-        resp->setStatusCode(drogon::k500InternalServerError);
-        resp->setBody(R"({"error":"internal error"})");
+        fillDirectError(resp, drogon::k500InternalServerError, "internal_error", "internal error");
         callback(resp);
     }
 }
@@ -243,7 +255,7 @@ void ImageController::getById(const drogon::HttpRequestPtr& req,
 
     ImageService service;
     ServiceError error;
-    auto result = service.getById(*userId, id, error);
+    auto result = service.getById(*userId, id, error, true);
     if (!result) {
         fillServiceError(resp, error);
         callback(resp);
@@ -252,6 +264,34 @@ void ImageController::getById(const drogon::HttpRequestPtr& req,
 
     resp->setStatusCode(drogon::k200OK);
     resp->setBody(result->generation.toJson().dump());
+    callback(resp);
+}
+
+void ImageController::getBinaryById(const drogon::HttpRequestPtr& req,
+                                    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                                    int64_t id)
+{
+    auto resp = drogon::HttpResponse::newHttpResponse();
+    resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+
+    const auto userId = resolveUserId(req, resp);
+    if (!userId) {
+        callback(resp);
+        return;
+    }
+
+    ImageService service;
+    ServiceError error;
+    auto result = service.getBinaryById(*userId, id, error);
+    if (!result) {
+        fillServiceError(resp, error);
+        callback(resp);
+        return;
+    }
+
+    resp->setStatusCode(drogon::k200OK);
+    resp->setContentTypeString(result->content_type);
+    resp->setBody(result->body);
     callback(resp);
 }
 
@@ -270,7 +310,7 @@ void ImageController::getStatusById(const drogon::HttpRequestPtr& req,
 
     ImageService service;
     ServiceError error;
-    auto result = service.getById(*userId, id, error);
+    auto result = service.getById(*userId, id, error, false);
     if (!result) {
         fillServiceError(resp, error);
         callback(resp);
@@ -305,6 +345,56 @@ void ImageController::deleteById(const drogon::HttpRequestPtr& req,
 
     resp->setStatusCode(drogon::k200OK);
     resp->setBody(R"({"deleted":true})");
+    callback(resp);
+}
+
+void ImageController::cancelById(const drogon::HttpRequestPtr& req, std::function<void(const drogon::HttpResponsePtr&)>&& callback, int64_t id)
+{
+	auto resp = drogon::HttpResponse::newHttpResponse();
+	resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+
+	const auto userId = resolveUserId(req, resp);
+    if (!userId) {
+        callback(resp);
+        return;
+	}
+
+	ImageService service;
+	ServiceError error;
+	auto result = service.cancelById(*userId, id, error);
+	if (!result) {
+        fillServiceError(resp, error);
+        callback(resp);
+        return;
+    }
+
+	resp->setStatusCode(drogon::k200OK);
+	resp->setBody(result->generation.toJson(false).dump());
+    callback(resp);
+}
+
+void ImageController::retryById(const drogon::HttpRequestPtr & req, std::function<void(const drogon::HttpResponsePtr&)> && callback, int64_t id)
+{
+	auto resp = drogon::HttpResponse::newHttpResponse();
+	resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+
+	const auto userId = resolveUserId(req, resp);
+    if (!userId) {
+        callback(resp);
+        return;
+    }
+
+	ImageService service;
+	ServiceError error;
+	auto result = service.retryById(*userId, id, error);
+	if (!result) {
+        fillServiceError(resp, error);
+        callback(resp);
+        return;
+    }
+
+	resp->setStatusCode(drogon::k200OK);
+	resp->setBody(result->generation.toJson().dump());
     callback(resp);
 }
 

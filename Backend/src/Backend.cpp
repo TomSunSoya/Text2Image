@@ -119,6 +119,11 @@ void applyEnvOverrides(nlohmann::json& config)
         pythonService = nlohmann::json::object();
     }
 
+	auto& taskEngine = config["task_engine"];
+	if (!taskEngine.is_object()) {
+        taskEngine = nlohmann::json::object();
+    }
+
     overrideString(server, "host", "BACKEND_HOST");
     overrideInt(server, "port", "BACKEND_PORT");
     overrideInt(server, "threads", "BACKEND_THREADS");
@@ -134,7 +139,12 @@ void applyEnvOverrides(nlohmann::json& config)
 
     overrideString(pythonService, "url", "PYTHON_SERVICE_URL");
     overrideInt(pythonService, "timeout_seconds", "PYTHON_SERVICE_TIMEOUT_SECONDS");
-    overrideInt(pythonService, "queue_workers", "PYTHON_SERVICE_QUEUE_WORKERS");
+    
+    overrideInt(taskEngine, "workers", "TASK_ENGINE_WORKERS");
+	overrideInt(taskEngine, "poll_interval_ms", "TASK_ENGINE_POLL_INTERVAL_MS");
+	overrideInt(taskEngine, "lease_seconds", "TASK_ENGINE_LEASE_SECONDS");
+	overrideInt(taskEngine, "max_retries", "TASK_ENGINE_MAX_RETRIES");
+	overrideString(taskEngine, "worker_prefix", "TASK_ENGINE_WORKER_PREFIX");
 }
 
 } // namespace
