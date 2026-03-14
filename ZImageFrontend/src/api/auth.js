@@ -19,14 +19,6 @@ export const authApi = {
     })
   },
 
-  // 获取当前用户信息
-  getCurrentUser() {
-    return request({
-      url: '/auth/me',
-      method: 'get'
-    })
-  },
-
   // 登出（前端处理）
   logout() {
     localStorage.removeItem('token')

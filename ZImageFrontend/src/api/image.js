@@ -61,6 +61,22 @@ export const imageApi = {
     })
   },
 
+  // Cancel queued/running task
+  cancelImage(id) {
+    return request({
+      url: `/images/${id}/cancel`,
+      method: 'post'
+    })
+  },
+
+  // Retry failed/cancelled/timeout task
+  retryImage(id) {
+    return request({
+      url: `/images/${id}/retry`,
+      method: 'post'
+    })
+  },
+
   // Check health
   checkHealth() {
     return request({

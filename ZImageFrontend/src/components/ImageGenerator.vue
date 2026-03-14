@@ -98,7 +98,7 @@
 
       <div v-if="loading" class="loading-container">
         <el-progress :percentage="progressPercentage" :stroke-width="20" striped striped-flow />
-        <p class="loading-text">Task queued/running, polling status...</p>
+        <p class="loading-text">{{ loadingStatusText }}</p>
       </div>
 
       <div v-if="currentImage" class="result-container" :class="{ 'is-loading': loading }">
@@ -139,6 +139,12 @@
             <el-descriptions-item label="Generation Time">
               {{ currentImage.generationTime ? `${currentImage.generationTime.toFixed(2)}s` : '-' }}
             </el-descriptions-item>
+            <el-descriptions-item label="Request ID">
+              {{ currentImage.requestId || '-' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="Retry">
+              {{ `${currentImage.retryCount || 0} / ${currentImage.maxRetries || 0}` }}
+            </el-descriptions-item>
             <el-descriptions-item label="Size">
               {{ currentImage.width || form.width }} x {{ currentImage.height || form.height }}
             </el-descriptions-item>
@@ -148,13 +154,25 @@
             <el-descriptions-item label="Prompt" :span="2">
               {{ currentImage.prompt || form.prompt }}
             </el-descriptions-item>
+            <el-descriptions-item v-if="currentImage.failureCode" label="Failure Code" :span="2">
+              {{ currentImage.failureCode }}
+            </el-descriptions-item>
             <el-descriptions-item v-if="currentImage.errorMessage" label="Error" :span="2">
               {{ currentImage.errorMessage }}
             </el-descriptions-item>
           </el-descriptions>
 
           <div class="action-buttons">
-            <el-button type="primary" :disabled="!imageDataUrl" @click="handleDownload">
+            <el-button
+              v-if="currentTaskCanCancel"
+              type="warning"
+              plain
+              :loading="cancelling"
+              @click="handleCancelCurrentTask"
+            >
+              {{ cancelling ? 'Cancelling...' : 'Cancel Task' }}
+            </el-button>
+            <el-button type="primary" :disabled="!canDownloadCurrentImage || imageBinaryLoading" @click="handleDownload">
               <el-icon><Download /></el-icon>
               Download
             </el-button>
@@ -175,6 +193,13 @@ import { ElMessage } from 'element-plus'
 import { Picture, Download, CopyDocument } from '@element-plus/icons-vue'
 import { imageApi } from '@/api/image'
 import { useImageStore } from '@/stores/image'
+import {
+  canCancelImageTask,
+  canDownloadImageTask,
+  getImageStatusTagType,
+  isImageTerminalStatus,
+  normalizeImageStatus
+} from '@/utils/imageTask'
 
 const POLL_INTERVAL_MS = 2000
 const POLL_TIMEOUT_MS = 8 * 60 * 1000
@@ -182,6 +207,7 @@ const POLL_TIMEOUT_MS = 8 * 60 * 1000
 const imageStore = useImageStore()
 const formRef = ref(null)
 const loading = ref(false)
+const cancelling = ref(false)
 const progress = ref(0)
 const progressPercentage = computed(() => Math.floor(progress.value))
 const healthStatus = ref('unknown')
@@ -192,11 +218,31 @@ let activePollToken = 0
 let activeBinaryToken = 0
 
 const statusTagType = computed(() => {
-  const status = String(currentImage.value?.status || '').toLowerCase()
-  if (status === 'success') return 'success'
-  if (status === 'failed') return 'danger'
-  if (status === 'generating' || status === 'queued') return 'warning'
-  return 'info'
+  return getImageStatusTagType(currentImage.value?.status)
+})
+
+const loadingStatusText = computed(() => {
+  const status = normalizeImageStatus(currentImage.value?.status)
+
+  if (status === 'queued' || status === 'pending') {
+    return 'Task queued, waiting for worker...'
+  }
+
+  if (status === 'generating') {
+    return 'Image is generating, polling latest status...'
+  }
+
+  return 'Task queued/running, polling status...'
+})
+
+const currentTaskCanCancel = computed(() => canCancelImageTask(currentImage.value?.status))
+
+const canDownloadCurrentImage = computed(() => {
+  if (!canDownloadImageTask(currentImage.value?.status)) {
+    return false
+  }
+
+  return Boolean(imageDataUrl.value || currentImage.value?.imageUrl)
 })
 
 const form = reactive({
@@ -241,8 +287,6 @@ const imageDataUrl = computed(() => {
 })
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms))
-const normalizeStatus = (status) => String(status || '').toLowerCase()
-
 const revokeBinaryImageUrl = () => {
   if (binaryImageUrl.value && binaryImageUrl.value.startsWith('blob:')) {
     URL.revokeObjectURL(binaryImageUrl.value)
@@ -257,7 +301,7 @@ const resetBinaryPreview = () => {
 }
 
 const loadBinaryPreview = async (image) => {
-  if (!image?.id || !image?.imageUrl || image?.imageBase64 || normalizeStatus(image?.status) !== 'success') {
+  if (!image?.id || !image?.imageUrl || image?.imageBase64 || normalizeImageStatus(image?.status) !== 'success') {
     return
   }
 
@@ -287,7 +331,7 @@ const loadBinaryPreview = async (image) => {
 const checkHealth = async () => {
   try {
     const response = await imageApi.checkHealth()
-    const rawStatus = normalizeStatus(response?.data?.status)
+    const rawStatus = normalizeImageStatus(response?.data?.status)
     healthStatus.value = ['healthy', 'ok', 'success'].includes(rawStatus) ? 'healthy' : 'unhealthy'
   } catch (error) {
     healthStatus.value = 'unhealthy'
@@ -321,14 +365,10 @@ const pollImageTask = async (imageId, pollToken) => {
     }
     currentImage.value = latest
 
-    const status = normalizeStatus(latest.status)
-    if (status === 'success') {
+    const status = normalizeImageStatus(latest.status)
+    if (isImageTerminalStatus(status)) {
       progress.value = 100
       return latest
-    }
-
-    if (status === 'failed') {
-      throw new Error(latest.errorMessage || 'image generation failed')
     }
 
     const ratio = Math.min(elapsed / POLL_TIMEOUT_MS, 1)
@@ -340,10 +380,13 @@ const pollImageTask = async (imageId, pollToken) => {
 
 const handleGenerate = async () => {
   const pollToken = ++activePollToken
+  let generationStarted = false
 
   try {
     await formRef.value.validate()
+    generationStarted = true
     loading.value = true
+    cancelling.value = false
     progress.value = 5
     currentImage.value = null
     resetBinaryPreview()
@@ -368,10 +411,32 @@ const handleGenerate = async () => {
 
     const finalImage = await pollImageTask(imageId, pollToken)
     imageStore.setCurrentImage(finalImage)
-    imageStore.addToHistory(finalImage)
-    ElMessage.success('Image generated successfully')
+    currentImage.value = finalImage
+
+    const finalStatus = normalizeImageStatus(finalImage.status)
+    if (finalStatus === 'success') {
+      imageStore.addToHistory(finalImage)
+      ElMessage.success('Image generated successfully')
+      return
+    }
+
+    if (finalStatus === 'cancelled') {
+      ElMessage.warning('Task cancelled')
+      return
+    }
+
+    if (finalStatus === 'timeout') {
+      ElMessage.error(finalImage.errorMessage || 'Image generation timed out')
+      return
+    }
+
+    throw new Error(finalImage.errorMessage || 'image generation failed')
   } catch (error) {
     if (pollToken !== activePollToken) {
+      return
+    }
+
+    if (!generationStarted) {
       return
     }
 
@@ -380,16 +445,44 @@ const handleGenerate = async () => {
   } finally {
     if (pollToken === activePollToken) {
       loading.value = false
+      cancelling.value = false
     }
+  }
+}
+
+const handleCancelCurrentTask = async () => {
+  if (!currentTaskCanCancel.value || cancelling.value || !currentImage.value?.id) {
+    return
+  }
+
+  cancelling.value = true
+
+  try {
+    const response = await imageApi.cancelImage(currentImage.value.id)
+    activePollToken += 1
+    progress.value = 100
+    loading.value = false
+    currentImage.value = {
+      ...(currentImage.value || {}),
+      ...(response?.data || {})
+    }
+    imageStore.setCurrentImage(currentImage.value)
+    ElMessage.warning('Task cancelled')
+  } catch (error) {
+    console.error('Cancel task failed:', error)
+  } finally {
+    cancelling.value = false
   }
 }
 
 const handleReset = () => {
   activePollToken += 1
   loading.value = false
+  cancelling.value = false
   progress.value = 0
   currentImage.value = null
   resetBinaryPreview()
+  imageStore.setCurrentImage(null)
   formRef.value?.resetFields()
 }
 
@@ -445,7 +538,7 @@ watch(
       resetBinaryPreview()
     }
 
-    if (!next.id || !next.imageUrl || next.imageBase64 || normalizeStatus(next.status) !== 'success') {
+    if (!next.id || !next.imageUrl || next.imageBase64 || normalizeImageStatus(next.status) !== 'success') {
       return
     }
 

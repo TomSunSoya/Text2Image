@@ -3,8 +3,21 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span class="title">Generation History</span>
-          <el-button type="primary" size="small" @click="loadHistory">Refresh</el-button>
+          <div>
+            <span class="title">Generation History</span>
+            <p v-if="hasActiveTasks" class="subtitle">检测到进行中的任务，列表会自动刷新。</p>
+          </div>
+          <div class="header-actions">
+            <el-select v-model="selectedStatus" size="small" style="width: 180px" @change="handleStatusChange">
+              <el-option
+                v-for="option in statusOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+            <el-button type="primary" size="small" @click="loadHistory">Refresh</el-button>
+          </div>
         </div>
       </template>
 
@@ -50,8 +63,13 @@
                 <div class="details">
                   <p><strong>Prompt:</strong> {{ row.prompt }}</p>
                   <p v-if="row.negativePrompt"><strong>Negative Prompt:</strong> {{ row.negativePrompt }}</p>
+                  <p><strong>Request ID:</strong> {{ row.requestId || '-' }}</p>
                   <p><strong>Params:</strong> {{ row.width }} x {{ row.height }}, steps: {{ row.numSteps }}</p>
+                  <p><strong>Retry:</strong> {{ row.retryCount || 0 }} / {{ row.maxRetries || 0 }}</p>
+                  <p v-if="row.failureCode"><strong>Failure Code:</strong> {{ row.failureCode }}</p>
                   <p v-if="row.errorMessage"><strong>Error:</strong> {{ row.errorMessage }}</p>
+                  <p v-if="row.completedAt"><strong>Completed At:</strong> {{ formatDate(row.completedAt) }}</p>
+                  <p v-if="row.cancelledAt"><strong>Cancelled At:</strong> {{ formatDate(row.cancelledAt) }}</p>
                 </div>
               </div>
             </el-skeleton>
@@ -92,19 +110,47 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="Actions" width="170">
+        <el-table-column label="Actions" min-width="260">
           <template #default="{ row }">
-            <el-button
-              type="primary"
-              size="small"
-              :disabled="row.__detailLoading || row.__binaryLoading"
-              @click.stop="handleDownload(row)"
-            >
-              Download
-            </el-button>
-            <el-button type="danger" size="small" @click.stop="handleDelete(row)">
-              Delete
-            </el-button>
+            <div class="row-actions">
+              <el-button
+                type="primary"
+                size="small"
+                :disabled="row.__detailLoading || row.__binaryLoading || Boolean(row.__actionType) || !canDownloadTask(row)"
+                @click.stop="handleDownload(row)"
+              >
+                Download
+              </el-button>
+              <el-button
+                v-if="canCancelTask(row)"
+                type="warning"
+                size="small"
+                :loading="row.__actionType === 'cancel'"
+                :disabled="Boolean(row.__actionType)"
+                @click.stop="handleCancel(row)"
+              >
+                Cancel
+              </el-button>
+              <el-button
+                v-else-if="canRetryTask(row)"
+                type="success"
+                size="small"
+                :loading="row.__actionType === 'retry'"
+                :disabled="Boolean(row.__actionType)"
+                @click.stop="handleRetry(row)"
+              >
+                Retry
+              </el-button>
+              <el-button
+                type="danger"
+                size="small"
+                :loading="row.__actionType === 'delete'"
+                :disabled="Boolean(row.__actionType)"
+                @click.stop="handleDelete(row)"
+              >
+                Delete
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -124,9 +170,18 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { imageApi } from '@/api/image'
+import {
+  canCancelImageTask,
+  canDownloadImageTask,
+  canRetryImageTask,
+  getImageStatusTagType,
+  isImageActiveStatus
+} from '@/utils/imageTask'
+
+const AUTO_REFRESH_MS = 5000
 
 const tableRef = ref(null)
 const loading = ref(false)
@@ -134,18 +189,34 @@ const historyList = ref([])
 const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
+const selectedStatus = ref('all')
 
-onMounted(() => {
-  loadHistory()
-})
+const statusOptions = [
+  { label: 'All Statuses', value: 'all' },
+  { label: 'Queued', value: 'queued' },
+  { label: 'Generating', value: 'generating' },
+  { label: 'Success', value: 'success' },
+  { label: 'Failed', value: 'failed' },
+  { label: 'Cancelled', value: 'cancelled' },
+  { label: 'Timeout', value: 'timeout' }
+]
 
-const normalizeRow = (item) => ({
-  ...item,
-  __detailLoaded: Boolean(item?.imageBase64),
-  __detailLoading: false,
-  __binaryLoading: false,
-  __imageObjectUrl: ''
-})
+const hasActiveTasks = computed(() => historyList.value.some(row => isImageActiveStatus(row.status)))
+
+let refreshTimer = null
+
+const normalizeRow = (item, previousRow = null) => {
+  const merged = previousRow ? { ...previousRow, ...item } : { ...item }
+
+  return {
+    ...merged,
+    __detailLoaded: Boolean(merged?.imageBase64) || Boolean(previousRow?.__detailLoaded),
+    __detailLoading: false,
+    __binaryLoading: false,
+    __actionType: '',
+    __imageObjectUrl: previousRow?.__imageObjectUrl || ''
+  }
+}
 
 const revokeRowObjectUrl = (row) => {
   if (row?.__imageObjectUrl && row.__imageObjectUrl.startsWith('blob:')) {
@@ -161,22 +232,78 @@ const revokeAllObjectUrls = () => {
   historyList.value.forEach(revokeRowObjectUrl)
 }
 
-const loadHistory = async () => {
-  loading.value = true
+const rebuildHistoryList = (rawList) => {
+  const previousMap = new Map(historyList.value.map(row => [row.id, row]))
+  const nextIds = new Set(rawList.map(item => item.id))
+
+  historyList.value.forEach(row => {
+    if (!nextIds.has(row.id)) {
+      revokeRowObjectUrl(row)
+    }
+  })
+
+  return rawList.map(item => normalizeRow(item, previousMap.get(item.id)))
+}
+
+const clearAutoRefresh = () => {
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+const syncAutoRefresh = () => {
+  clearAutoRefresh()
+
+  if (!hasActiveTasks.value) {
+    return
+  }
+
+  refreshTimer = window.setInterval(() => {
+    if (!loading.value) {
+      loadHistory({ silent: true })
+    }
+  }, AUTO_REFRESH_MS)
+}
+
+const loadHistory = async (options = {}) => {
+  const { silent = false } = options
+
+  if (!silent) {
+    loading.value = true
+  }
+
   try {
-    const response = await imageApi.getMyImages({
+    const params = {
       page: currentPage.value - 1,
       size: pageSize.value
-    })
+    }
+
+    const response = selectedStatus.value === 'all'
+      ? await imageApi.getMyImages(params)
+      : await imageApi.getImagesByStatus(selectedStatus.value, params)
+
     const rawList = response?.data?.content || []
-    revokeAllObjectUrls()
-    historyList.value = rawList.map(normalizeRow)
+    historyList.value = rebuildHistoryList(rawList)
     total.value = response?.data?.totalElements || 0
   } catch (error) {
-    ElMessage.error('Failed to load history')
+    if (!silent) {
+      ElMessage.error(error?.message || 'Failed to load history')
+    } else {
+      console.error('Auto refresh history failed:', error)
+    }
   } finally {
-    loading.value = false
+    if (!silent) {
+      loading.value = false
+    }
+
+    syncAutoRefresh()
   }
+}
+
+const handleStatusChange = () => {
+  currentPage.value = 1
+  loadHistory()
 }
 
 const handleSizeChange = () => {
@@ -192,9 +319,11 @@ const buildImageUrl = (row) => {
   if (row?.imageBase64) {
     return `data:image/png;base64,${String(row.imageBase64).replace(/\s/g, '')}`
   }
+
   if (row?.__imageObjectUrl) {
     return row.__imageObjectUrl
   }
+
   return ''
 }
 
@@ -210,7 +339,7 @@ const ensureRowDetail = async (row) => {
     Object.assign(row, detail)
     row.__detailLoaded = true
   } catch (error) {
-    ElMessage.error('Failed to load image detail')
+    ElMessage.error(error?.message || 'Failed to load image detail')
   } finally {
     row.__detailLoading = false
   }
@@ -221,7 +350,7 @@ const ensureBinaryLoaded = async (row) => {
     return
   }
 
-  if (String(row?.status || '').toLowerCase() !== 'success' || !row?.imageUrl) {
+  if (!canDownloadImageTask(row?.status) || !row?.imageUrl) {
     return
   }
 
@@ -294,42 +423,112 @@ const handleDownload = async (row) => {
   ElMessage.success('Download started')
 }
 
+const handleCancel = async (row) => {
+  if (!row?.id || row.__actionType) {
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm('Cancel this task?', 'Confirm', {
+      confirmButtonText: 'Cancel Task',
+      cancelButtonText: 'Keep Running',
+      type: 'warning'
+    })
+  } catch (error) {
+    return
+  }
+
+  row.__actionType = 'cancel'
+  try {
+    await imageApi.cancelImage(row.id)
+    ElMessage.success('Task cancelled')
+    await loadHistory()
+  } catch (error) {
+    console.error('Cancel task failed:', error)
+  } finally {
+    row.__actionType = ''
+  }
+}
+
+const handleRetry = async (row) => {
+  if (!row?.id || row.__actionType) {
+    return
+  }
+
+  row.__actionType = 'retry'
+  try {
+    await imageApi.retryImage(row.id)
+    ElMessage.success('Task requeued')
+    currentPage.value = 1
+    await loadHistory()
+  } catch (error) {
+    console.error('Retry task failed:', error)
+  } finally {
+    row.__actionType = ''
+  }
+}
+
 const handleDelete = async (row) => {
+  if (!row?.id || row.__actionType) {
+    return
+  }
+
   try {
     await ElMessageBox.confirm('Delete this record?', 'Confirm', {
       confirmButtonText: 'Delete',
       cancelButtonText: 'Cancel',
       type: 'warning'
     })
+  } catch (error) {
+    return
+  }
 
+  row.__actionType = 'delete'
+  try {
     await imageApi.deleteImage(row.id)
     ElMessage.success('Deleted successfully')
-    loadHistory()
-  } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error('Delete failed')
+
+    if (historyList.value.length === 1 && currentPage.value > 1) {
+      currentPage.value -= 1
     }
+
+    await loadHistory()
+  } catch (error) {
+    console.error('Delete task failed:', error)
+  } finally {
+    row.__actionType = ''
   }
 }
 
-const getStatusType = (status) => {
-  const statusMap = {
-    success: 'success',
-    failed: 'danger',
-    generating: 'warning',
-    queued: 'warning',
-    pending: 'info'
+const canCancelTask = (row) => canCancelImageTask(row?.status)
+
+const canRetryTask = (row) => canRetryImageTask(row)
+
+const canDownloadTask = (row) => canDownloadImageTask(row?.status)
+
+const getStatusType = (status) => getImageStatusTagType(status)
+
+const parseDate = (dateString) => {
+  if (!dateString) {
+    return null
   }
-  return statusMap[String(status || '').toLowerCase()] || 'info'
+
+  const normalized = typeof dateString === 'string' ? dateString.replace(' ', 'T') : dateString
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? null : date
 }
 
 const formatDate = (dateString) => {
-  if (!dateString) return '-'
-  const date = new Date(dateString)
-  return date.toLocaleString('zh-CN')
+  const date = parseDate(dateString)
+  return date ? date.toLocaleString('zh-CN') : '-'
 }
 
+onMounted(() => {
+  loadHistory()
+})
+
 onBeforeUnmount(() => {
+  clearAutoRefresh()
   revokeAllObjectUrls()
 })
 </script>
@@ -345,11 +544,24 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
 }
 
 .title {
   font-size: 18px;
   font-weight: bold;
+}
+
+.subtitle {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #d97706;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .expand-content {
@@ -406,6 +618,12 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 :deep(.el-table__row) {
   cursor: pointer;
 }
@@ -416,6 +634,21 @@ onBeforeUnmount(() => {
 
 :deep(.el-table__row .el-button:focus-visible) {
   outline: none;
+}
+
+@media (max-width: 768px) {
+  .card-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .expand-content {
+    flex-direction: column;
+  }
 }
 </style>
 
