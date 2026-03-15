@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <chrono>
+#include <format>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -35,11 +36,6 @@ std::string trim(std::string value)
         value.pop_back();
     }
     return value;
-}
-
-bool startsWith(const std::string& value, const char* prefix)
-{
-    return value.rfind(prefix, 0) == 0;
 }
 
 std::optional<ParsedUrl> parseUrl(const std::string& url)
@@ -98,7 +94,7 @@ std::string resolveRedirectUrl(const ParsedUrl& current, const std::string& loca
         return {};
     }
 
-    if (startsWith(location, "http://") || startsWith(location, "https://")) {
+    if (location.starts_with("http://") || location.starts_with("https://")) {
         return location;
     }
 
@@ -157,13 +153,13 @@ SendEnvelope sendOnce(const ParsedUrl& parsed,
     try {
         auto [result, response] = client->sendRequest(request, timeout);
         if (result != drogon::ReqResult::Ok) {
-            envelope.http.error = "request failed, req_result=" + std::to_string(static_cast<int>(result));
+            envelope.http.error = std::format("request failed, req_result={}", static_cast<int>(result));
             return envelope; 
         }
 
         envelope.response = std::move(response);
     } catch (const std::exception& ex) {
-        envelope.http.error = std::string("request exception: ") + ex.what();
+        envelope.http.error = std::format("request exception: {}", ex.what());
         return envelope;
     }
 
@@ -199,7 +195,7 @@ HttpResult HttpClient::get(const std::string& url,
         const auto parsed = parseUrl(currentUrl);
         if (!parsed) {
             HttpResult invalid;
-            invalid.error = "invalid url: " + currentUrl;
+            invalid.error = std::format("invalid url: {}", currentUrl);
             return invalid;
         }
 
@@ -234,7 +230,7 @@ HttpResult HttpClient::postJson(const std::string& url,
     const auto parsed = parseUrl(url);
     if (!parsed) {
         HttpResult invalid;
-        invalid.error = "invalid url: " + url;
+        invalid.error = std::format("invalid url: {}", url);
         return invalid;
     }
 

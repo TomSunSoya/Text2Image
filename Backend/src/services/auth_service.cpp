@@ -4,30 +4,20 @@
 #include "jwt_utils.h"
 #include "password_utils.h"
 
-std::optional<RegisterResult> AuthService::registerUser(const nlohmann::json& payload,
-                                                        ServiceError& error) const
+std::expected<RegisterResult, ServiceError> AuthService::registerUser(const nlohmann::json& payload) const
 {
     models::User user = models::User::fromJson(payload);
     if (!user.validate()) {
-        error.status = drogon::k400BadRequest;
-        error.code = "invalid_user_data";
-        error.message = "invalid user data";
-        return std::nullopt;
+        return std::unexpected(ServiceError{drogon::k400BadRequest, "invalid_user_data", "invalid user data"});
     }
 
     UserRepo repo;
     if (repo.existsByUsername(user.username)) {
-        error.status = drogon::k409Conflict;
-        error.code = "username_exists";
-        error.message = "username already exists";
-        return std::nullopt;
+        return std::unexpected(ServiceError{drogon::k409Conflict, "username_exists", "username already exists"});
     }
 
     if (repo.existsByEmail(user.email)) {
-        error.status = drogon::k409Conflict;
-        error.code = "email_exists";
-        error.message = "email already exists";
-        return std::nullopt;
+        return std::unexpected(ServiceError{drogon::k409Conflict, "email_exists", "email already exists"});
     }
 
 	user.password = security::hashPassword(user.password);
@@ -35,17 +25,14 @@ std::optional<RegisterResult> AuthService::registerUser(const nlohmann::json& pa
     return RegisterResult{user};
 }
 
-std::optional<LoginResult> AuthService::login(const nlohmann::json& payload, ServiceError& error) const
+std::expected<LoginResult, ServiceError> AuthService::login(const nlohmann::json& payload) const
 {
     const std::string username = payload.value("username", "");
     const std::string email = payload.value("email", "");
     const std::string password = payload.value("password", "");
 
     if (password.empty() || (username.empty() && email.empty())) {
-        error.status = drogon::k400BadRequest;
-        error.message = "missing credentials";
-		error.code = "missing_credentials";
-        return std::nullopt;
+        return std::unexpected(ServiceError{drogon::k400BadRequest, "missing_credentials", "missing credentials"});
     }
 
     UserRepo repo;
@@ -58,10 +45,7 @@ std::optional<LoginResult> AuthService::login(const nlohmann::json& payload, Ser
     }
 
     if (!user || !security::verifyPassword(password, user->password)) {
-        error.status = drogon::k401Unauthorized;
-        error.message = "invalid username or password";
-		error.code = "invalid_credentials";
-        return std::nullopt;
+        return std::unexpected(ServiceError{drogon::k401Unauthorized, "invalid_credentials", "invalid username or password"});
     }
 
     return LoginResult{*user, utils::createToken(user->id, user->username)};

@@ -1,16 +1,20 @@
 #include "image_generation.h"
-#include <iomanip>
-#include <sstream>
+#include <ctime>
+#include <format>
 
 namespace models {
 
     static std::string timeToString(const std::chrono::system_clock::time_point& tp) {
         auto time = std::chrono::system_clock::to_time_t(tp);
         std::tm tm{};
+#ifdef _WIN32
         localtime_s(&tm, &time);
-        std::stringstream ss;
-        ss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
-        return ss.str();
+#else
+        localtime_r(&time, &tm);
+#endif
+        return std::format("{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}",
+            tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+            tm.tm_hour, tm.tm_min, tm.tm_sec);
     }
 
     static void putOptionalTime(nlohmann::json& j, const char* key, const std::optional<std::chrono::system_clock::time_point>& value) {

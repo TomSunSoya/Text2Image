@@ -1,6 +1,6 @@
 #pragma once
 
-#include <optional>
+#include <expected>
 #include <string>
 
 #include <drogon/HttpTypes.h>
@@ -20,6 +20,6 @@ struct LoginResult {
 
 class AuthService {
 public:
-    std::optional<RegisterResult> registerUser(const nlohmann::json& payload, ServiceError& error) const;
-    std::optional<LoginResult> login(const nlohmann::json& payload, ServiceError& error) const;
+    std::expected<RegisterResult, ServiceError> registerUser(const nlohmann::json& payload) const;
+    std::expected<LoginResult, ServiceError> login(const nlohmann::json& payload) const;
 };

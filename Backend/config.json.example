@@ -1,0 +1,43 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "threads": 4,
+    "log_level": "info"
+  },
+  "database": {
+    "host": "localhost",
+    "port": 33060,
+    "username": "root",
+    "password": "CHANGE_ME",
+    "database": "image_generator",
+    "pool_size": 10,
+    "charset": "utf8mb4"
+  },
+  "jwt": {
+    "secret": "CHANGE_ME",
+    "expiration_hours": 24
+  },
+  "python_service": {
+    "url": "http://localhost:8081",
+    "timeout_seconds": 360
+  },
+  "task_engine": {
+    "workers": 2,
+    "poll_interval_ms": 500,
+    "lease_seconds": 600,
+    "max_retries": 3,
+    "worker_prefix": "backend-worker"
+  },
+  "cors": {
+    "enabled": true,
+    "allow_origins": [ "*" ],
+    "allow_methods": [ "GET", "POST", "PUT", "DELETE", "OPTIONS" ],
+    "allow_headers": [ "Content-Type", "Authorization" ]
+  },
+  "storage": {
+    "root_dir": "storage/images",
+    "public_url_prefix": "/api/images",
+    "extension": "png"
+  }
+}

@@ -5,6 +5,7 @@
 #include <functional>
 #include <mutex>
 #include <queue>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -20,7 +21,7 @@ public:
     void enqueue(const models::ImageGeneration& generation);
     std::size_t pendingCount() const;
 
-    ~AsyncImageQueue();
+    ~AsyncImageQueue() = default;
 
     AsyncImageQueue(const AsyncImageQueue&) = delete;
     AsyncImageQueue& operator=(const AsyncImageQueue&) = delete;
@@ -28,13 +29,12 @@ public:
 private:
     AsyncImageQueue() = default;
 
-    void workerLoop();
+    void workerLoop(std::stop_token stopToken);
 
     mutable std::mutex mutex_;
-    std::condition_variable cv_;
+    std::condition_variable_any cv_;
     std::queue<models::ImageGeneration> queue_;
-    std::vector<std::thread> workers_;
+    std::vector<std::jthread> workers_;
     TaskHandler handler_;
     bool started_{false};
-    bool stopping_{false};
 };

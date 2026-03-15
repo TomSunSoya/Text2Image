@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <optional>
 #include <stdexcept>
@@ -166,9 +167,9 @@ nlohmann::json loadConfig(const std::string& path)
         return config;
     }
 
-    std::string message = "failed to open config file: " + path + " (tried:";
+    std::string message = std::format("failed to open config file: {} (tried:", path);
     for (const auto& p : tried) {
-        message += " " + p.string();
+        message += std::format(" {}", p.string());
     }
     message += ")";
     throw std::runtime_error(message);

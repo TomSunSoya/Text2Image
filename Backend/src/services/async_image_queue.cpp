@@ -14,7 +14,7 @@ AsyncImageQueue& AsyncImageQueue::instance()
 
 void AsyncImageQueue::start(TaskHandler handler, std::size_t workerCount)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     if (started_) {
         return;
     }
@@ -24,21 +24,20 @@ void AsyncImageQueue::start(TaskHandler handler, std::size_t workerCount)
         throw std::invalid_argument("AsyncImageQueue handler must not be empty");
     }
 
-    const std::size_t safeWorkerCount = (std::max)(workerCount, static_cast<std::size_t>(1));
+    const std::size_t safeWorkerCount = std::max(workerCount, static_cast<std::size_t>(1));
     workers_.reserve(safeWorkerCount);
     for (std::size_t i = 0; i < safeWorkerCount; ++i) {
-        workers_.emplace_back(&AsyncImageQueue::workerLoop, this);
+        workers_.emplace_back([this](std::stop_token st) { workerLoop(std::move(st)); });
     }
 
     started_ = true;
-    stopping_ = false;
 }
 
 void AsyncImageQueue::enqueue(const models::ImageGeneration& generation)
 {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!started_ || stopping_) {
+        std::lock_guard lock(mutex_);
+        if (!started_) {
             throw std::runtime_error("AsyncImageQueue is not running");
         }
 
@@ -50,42 +49,26 @@ void AsyncImageQueue::enqueue(const models::ImageGeneration& generation)
 
 std::size_t AsyncImageQueue::pendingCount() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard lock(mutex_);
     return queue_.size();
 }
 
-AsyncImageQueue::~AsyncImageQueue()
+void AsyncImageQueue::workerLoop(std::stop_token stopToken)
 {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stopping_ = true;
-    }
-
-    cv_.notify_all();
-
-    for (auto& worker : workers_) {
-        if (worker.joinable()) {
-            worker.join();
-        }
-    }
-}
-
-void AsyncImageQueue::workerLoop()
-{
-    while (true) {
+    while (!stopToken.stop_requested()) {
         models::ImageGeneration task;
 
         {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] {
-                return stopping_ || !queue_.empty();
+            std::unique_lock lock(mutex_);
+            cv_.wait(lock, stopToken, [this] {
+                return !queue_.empty();
             });
 
-            if (stopping_ && queue_.empty()) {
+            if (stopToken.stop_requested() && queue_.empty()) {
                 return;
             }
 
-            task = queue_.front();
+            task = std::move(queue_.front());
             queue_.pop();
         }
 

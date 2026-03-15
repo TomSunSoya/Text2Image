@@ -37,27 +37,23 @@ const router = createRouter({
 // 全局前置守卫
 router.beforeEach((to, from, next) => {
   const authStore = useAuthStore()
-  const token = localStorage.getItem('token')
+  const isAuthenticated = authStore.checkAuth()
   
   // 需要认证的页面
   if (to.meta.requiresAuth) {
-    if (!token) {
+    if (!isAuthenticated) {
       // 未登录，跳转到登录页
       next({
         path: '/login',
         query: { redirect: to.fullPath } // 保存目标路由，登录后跳转
       })
     } else {
-      // 已登录，确保 store 中有用户信息
-      if (!authStore.userInfo) {
-        authStore.checkAuth()
-      }
       next()
     }
   } 
   // 仅游客可访问的页面（登录、注册）
   else if (to.meta.guestOnly) {
-    if (token) {
+    if (isAuthenticated) {
       // 已登录用户访问登录页，跳转到首页
       next('/')
     } else {
