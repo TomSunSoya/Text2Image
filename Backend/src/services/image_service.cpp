@@ -15,6 +15,7 @@
 #include "ImageRepo.h"
 #include "client.h"
 #include "image_storage.h"
+#include "task_event_hub.h"
 #include "task_state_machine.h"
 
 namespace {
@@ -37,10 +38,10 @@ TaskEngineConfig loadTaskEngineConfig()
         const auto backendConfig = backend::loadConfig();
         if (backendConfig.contains("task_engine") && backendConfig.at("task_engine").is_object()) {
             const auto& taskEngineConfig = backendConfig.at("task_engine");
-            config.workers = std::max(1, taskEngineConfig.value("workers", config.workers));
-            config.poll_interval_ms = std::max(100, taskEngineConfig.value("poll_interval_ms", config.poll_interval_ms));
-            config.lease_seconds = std::max(30l, taskEngineConfig.value("lease_seconds", config.lease_seconds));
-            config.max_retries = std::max(0, taskEngineConfig.value("max_retries", config.max_retries));
+            config.workers = (std::max)(1, taskEngineConfig.value("workers", config.workers));
+            config.poll_interval_ms = (std::max)(100, taskEngineConfig.value("poll_interval_ms", config.poll_interval_ms));
+            config.lease_seconds = (std::max)(30l, taskEngineConfig.value("lease_seconds", config.lease_seconds));
+            config.max_retries = (std::max)(0, taskEngineConfig.value("max_retries", config.max_retries));
             config.worker_prefix = taskEngineConfig.value("worker_prefix", config.worker_prefix);
         }
     } catch (const std::exception& ex) {
@@ -48,6 +49,12 @@ TaskEngineConfig loadTaskEngineConfig()
     } catch (...) {
         spdlog::error("Failed to load task engine config, using defaults. Unknown exception.");
     }
+    return config;
+}
+
+const TaskEngineConfig& taskEngineConfig()
+{
+    static const TaskEngineConfig config = loadTaskEngineConfig();
     return config;
 }
 
@@ -364,12 +371,15 @@ void workerLoop(std::stop_token stopToken, const std::string& workerId, const Ta
 
 			spdlog::info("task worker claimed task id={}, user_id={}, request_id={}, worker_id={}",
 			             task->id, task->user_id, task->request_id, workerId);
+            TaskEventHub::instance().publishTaskUpdated(*task);
 
 			auto result = runRemoteGeneration(*task);
 			persistGeneratedImage(result);
             if (!repo.finishClaimedTask(result))
 				spdlog::warn("task worker failed to finish claimed task id={}, user_id={}, worker_id={}",
 				             task->id, task->user_id, workerId);
+            else
+                TaskEventHub::instance().publishTaskUpdated(result);
 		}
 		catch (const std::exception& ex) {
             spdlog::error("task worker exception: {}, worker_id={}", ex.what(), workerId);
@@ -383,7 +393,7 @@ void workerLoop(std::stop_token stopToken, const std::string& workerId, const Ta
 
 void ensureWorkersStarted() {
     std::call_once(workerStartOnce(), [] {
-		const auto cfg = loadTaskEngineConfig();
+		const auto& cfg = taskEngineConfig();
 		auto& workers = taskWorkers();
 		workers.reserve(cfg.workers);
 
@@ -434,6 +444,7 @@ std::expected<ImageCreateResult, ServiceError> ImageService::create(int64_t user
         }
 
         generation.id = repo.insert(generation);
+        TaskEventHub::instance().publishTaskUpdated(generation);
 		ensureWorkersStarted();
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::create persist error: {}", ex.what());
@@ -453,9 +464,8 @@ std::expected<ImageListResult, ServiceError> ImageService::listMy(int64_t userId
 
     try {
         ImageRepo repo;
-        auto content = repo.findByUserId(userId, page, size);
-        const auto total = repo.countByUserId(userId);
-        return ImageListResult{std::move(content), total};
+        auto result = repo.findByUserId(userId, page, size);
+        return ImageListResult{std::move(result.content), result.total_elements};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::listMy error: {}", ex.what());
         return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_history_load_failed", "failed to load image history"});
@@ -475,9 +485,8 @@ std::expected<ImageListResult, ServiceError> ImageService::listMyByStatus(int64_
 
     try {
         ImageRepo repo;
-        auto content = repo.findByUserIdAndStatus(userId, target, page, size);
-        const auto total = repo.countByUserIdAndStatus(userId, target);
-        return ImageListResult{std::move(content), total};
+        auto result = repo.findByUserIdAndStatus(userId, target, page, size);
+        return ImageListResult{std::move(result.content), result.total_elements};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::listMyByStatus error: {}", ex.what());
         return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_history_load_failed", "failed to load image history"});
@@ -543,6 +552,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::cancelById(int64_t use
             return std::unexpected(ServiceError{drogon::k409Conflict, "task_cancel_conflict", "task cannot be canceled"});
         }
 
+        TaskEventHub::instance().publishTaskUpdated(updated);
 		return ImageGetResult{updated};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::cancelById error: {}", ex.what());
@@ -576,6 +586,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::retryById(int64_t user
             return std::unexpected(ServiceError{drogon::k409Conflict, "task_retry_conflict", "task cannot be retried"});
         }
 
+        TaskEventHub::instance().publishTaskUpdated(updated);
 		ensureWorkersStarted();
 		return ImageGetResult{updated};
     } catch (const std::exception& ex) {

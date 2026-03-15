@@ -75,7 +75,6 @@ namespace models {
             {"failureCode", failure_code},
             {"workerId", worker_id},
             {"imageUrl", image_url},
-            {"imageBase64", image_base64},
             {"errorMessage", error_message},
             {"generationTime", generation_time},
             {"createdAt", timeToString(created_at)},
