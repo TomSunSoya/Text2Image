@@ -1,136 +1,88 @@
-# ZImage 待改进问题清单
+# ZImage 改进路线图
 
-## 1. 安全问题 (高优先级)
+## 第一梯队：必须补齐（缺了会被扣分）
 
-### 1.1 config.json 明文密码已提交到 git
-- **位置**: `Backend/config.json:12`
-- **问题**: `"password": "Zw08253533"` 直接暴露在仓库中，即使 README 有提醒，历史 commit 中密码已经泄露
-- **修复**: 轮换数据库密码，将 config.json 加入 .gitignore，改用环境变量注入敏感配置
+### 1.1 测试体系
 
-### 1.2 ModelService 路径穿越风险
-- **位置**: `ModelService/model_service.py:301-307`
-- **问题**: `/temp/{filename}` 端点直接用 `os.path.join(TEMP_DIR, filename)` 拼接用户输入，攻击者可用 `../../etc/passwd` 读取任意文件
-- **修复**: 校验 filename 不包含 `..` 或路径分隔符，或使用 `pathlib` 验证解析后的路径仍在 TEMP_DIR 内
+- **Backend 单元测试**：使用 Google Test，优先覆盖 service 层（`AuthService`、`ImageService` 的业务逻辑）和纯函数模块（`task_state_machine`）
+- **Backend API 集成测试**：用测试专用数据库跑完整请求链路，验证 HTTP 状态码、响应结构、鉴权拦截
+- **Frontend 工具模块测试**：使用 Vitest 对 `taskSocket.js`、`imageTask.js`、`jwt.js` 等工具函数做单测
+- **面试价值**：能讲清楚"哪些值得测、哪些不值得测"比覆盖率数字更重要
 
-### 1.3 无速率限制
-- **位置**: 全局
-- **问题**: 认证接口 (login/register) 和图像生成接口都没有限流，容易被暴力破解或资源耗尽攻击
-- **修复**: 后端添加 IP/用户维度的速率限制中间件
+### 1.2 容器化
 
----
-
-## 2. 性能瓶颈 (中高优先级)
-
-### 2.1 ModelService generation_lock 串行化所有推理
-- **位置**: `ModelService/model_service.py:184`
-- **问题**: 使用 `threading.Lock()` 保护推理过程，即使 GPU 有余量也只能同时生成一张图
-- **修复**: 改用 `threading.Semaphore` 允许受控并发，或根据 GPU 显存动态调整并发数
-
-### 2.2 Backend 全局数据库互斥锁
-- **位置**: `Backend/src/database/ImageRepo.cpp:27-31`
-- **问题**: 单个 `std::mutex` 保护所有 DB 操作，连接池的并发优势被完全消解
-- **修复**: 改为 session-per-request 模式，让每个线程独立从连接池获取 session
-
-### 2.3 buildRequestId 用毫秒时间戳，存在碰撞风险
-- **位置**: `Backend/src/services/image_service.cpp:62-67`
-- **问题**: 同一毫秒内的两个请求会得到相同的 request_id
-- **修复**: 改用 UUID 生成唯一标识
+- **docker-compose.yml**：一键拉起 MySQL + Backend + ModelService + Frontend（nginx 做静态托管 + 反向代理）
+- **Backend Dockerfile**：多阶段构建，编译阶段用完整 SDK，运行阶段用精简镜像
+- **ModelService Dockerfile**：GPU 基础镜像 + pip 依赖安装 + 模型文件挂载
+- **面试价值**：证明你交付的是可部署的产品，不是只能在本机跑的 demo
 
 ---
 
-## 3. 代码质量问题
+## 第二梯队：有了会加分
 
-### 3.1 ModelService 图片保存了两次但只用了一次
-- **位置**: `ModelService/model_service.py:214-217`
-- **问题**: 先 `image.save(filepath)` 存文件，又 `image.save(buffered, format="PNG")` 存到 BytesIO，但 `buffered` 从未被使用
-- **修复**: 删除无用的 BytesIO 写入
+### 2.1 CI/CD 流水线
 
-### 3.2 FastAPI startup 事件使用了已弃用的 API
-- **位置**: `ModelService/model_service.py:329`
-- **问题**: `@app.on_event("startup")` 已被 FastAPI 弃用
-- **修复**: 迁移到 `lifespan` context manager 模式
+- **GitHub Actions**：push 触发编译 + 测试 + Docker 镜像构建
+- C++ 项目能跑通 CI 本身就是加分项（很多人做不到）
+- 建议阶段：lint → 单元测试 → 集成测试 → 镜像构建 → 推送到 registry
 
-### 3.3 前端中英文混杂
-- **位置**: `ZImageFrontend/src/stores/auth.js` (中文) vs `ZImageFrontend/src/components/ImageGenerator.vue` (英文)
-- **问题**: 用户可见文案中文英文混用，体验不统一
-- **修复**: 统一语言，最好引入 vue-i18n 做国际化
+### 2.2 可观测性
 
-### 3.4 Logger 使用 f-string 而非惰性格式化
-- **位置**: `ModelService/model_service.py` 全文
-- **问题**: 使用 `logger.info(f"...")` 而非 `logger.info("...", arg)`，即使日志级别不满足也会执行字符串格式化，浪费性能
-- **修复**: 改为 `logger.info("Loading model from %s", LOCAL_MODEL_PATH)` 风格
+- **Prometheus metrics**：请求延迟、任务队列深度、worker 处理耗时、DB 连接健康状态
+- **结构化日志**：spdlog 已有基础，统一输出 JSON 格式，方便 ELK/Loki 采集
+- **面试价值**：说明你关注线上运行状态，不是写完代码就不管了
 
-### 3.5 localtime_s 是 Windows 专用
-- **位置**: `Backend/src/database/ImageRepo.cpp:59`
-- **问题**: `localtime_s` 是 MSVC 扩展，Linux/macOS 上编译不过 (对应函数为 `localtime_r`)
-- **修复**: 使用条件编译或 C++20 `<chrono>` 的跨平台格式化
+### 2.3 接口文档
+
+- **OpenAPI/Swagger 规范**：Drogon 没有原生支持，可手写 `openapi.yaml` 或用 Apifox/Postman 导出接口集合
+- 门槛低但效果明显，体现工程规范意识
+- 包含认证方式说明、请求/响应示例、错误码定义
 
 ---
 
-## 4. 功能缺失
+## 第三梯队：体现架构深度
 
-### 4.1 无 WebSocket/SSE 实时推送
-- **现状**: 前端每 2 秒轮询一次任务状态 (`ImageGenerator.vue:204`)
-- **问题**: 轮询效率低、延迟高、增加服务器负载
-- **建议**: 引入 SSE (Server-Sent Events) 替代轮询，后端推送任务状态变更
+### 3.1 存储层分离
 
-### 4.2 无图片画廊/网格视图
-- **现状**: 历史记录只有表格列表形式
-- **问题**: 缺少视觉化浏览体验，不直观
-- **建议**: 增加网格/瀑布流画廊模式，支持切换列表/画廊视图
+- **现状**：图片二进制数据以 base64 存在 MySQL LONGTEXT 字段中
+- **目标**：分离到对象存储（MinIO / 本地文件系统 + CDN 路径），DB 只存元数据和 storage_key
+- **收益**：大幅减小数据库体积，查询性能提升，支持 CDN 加速分发
+- **面试价值**：能讲数据分层存储的设计决策
 
-### 4.3 无 Prompt 模板/预设
-- **现状**: 用户每次都要从零输入 prompt
-- **问题**: 降低使用效率和新用户上手体验
-- **建议**: 提供预设模板库，支持用户收藏常用 prompt
+### 3.2 限流与安全加固
 
-### 4.4 无用户设置页
-- **现状**: 登录后没有个人中心
-- **问题**: 无法修改密码、查看账户信息、调整偏好设置
-- **建议**: 增加用户设置页面
+- **接口级 rate limiting**：每用户每分钟 N 次生成请求
+- **任务并发上限**：每用户最多 M 个进行中的任务
+- **输入校验**：prompt 长度限制、敏感词过滤
+- **面试价值**：说明你考虑过生产环境的安全边界
 
-### 4.5 前端 Token 过期检测不完整
-- **位置**: `ZImageFrontend/src/stores/auth.js:79-98`
-- **问题**: `checkAuth()` 只检查 token 是否存在，不解析 JWT 检查是否过期，导致持有过期 token 的用户直到收到 401 才被踢出
-- **建议**: 在 `checkAuth()` 中解析 JWT payload 检查 `exp` 字段
+### 3.3 优雅停机
 
-### 4.6 无响应式/移动端适配
-- **位置**: `ZImageFrontend/src/components/` 中的 CSS
-- **问题**: 样式只考虑了桌面端，移动端体验可能很差
-- **建议**: 增加媒体查询和响应式布局
+- **现状**：`std::jthread` 析构会 request_stop，但没有等待进行中任务完成的逻辑
+- **目标**：Backend 收到 SIGTERM 后 → 停止接收新请求 → 等待进行中的 worker 完成当前任务 → 关闭 DB 连接 → 退出
+- **面试价值**：展示对进程生命周期的理解
 
 ---
 
-## 5. 工程基础设施
+## 第四梯队：锦上添花
 
-### 5.1 无 Docker/docker-compose
-- **问题**: 三个服务 + MySQL 需要手动逐一启动和配置，新人上手成本高
-- **建议**: 编写 docker-compose.yml，一键拉起全部服务
+### 4.1 多模型支持
 
-### 5.2 无 CI/CD 流水线
-- **问题**: 没有自动化测试、构建、部署
-- **建议**: 配置 GitHub Actions，至少覆盖 lint + 单元测试 + 构建检查
+- 支持选择不同的生成模型（SD 1.5 / SDXL / Flux）
+- ModelService 动态加载/切换模型
+- 体现产品思维，不只是技术堆砌
 
-### 5.3 无数据库 migration 工具
-- **问题**: 建表/改表全靠手动 SQL，多人协作和环境同步容易出错
-- **建议**: 引入 migration 工具 (如 Flyway 或自定义 SQL 版本管理)
+### 4.2 用户体系完善
 
-### 5.4 前端未使用 TypeScript
-- **问题**: Vue 3 对 TypeScript 支持非常好，纯 JS 缺少编译期类型检查，容易引入运行时类型错误
-- **建议**: 逐步迁移到 TypeScript
-
-### 5.5 无 .env 环境管理
-- **位置**: `ZImageFrontend/src/utils/request.js`
-- **问题**: 前端 API 基础地址通过 Vite proxy 硬编码，不同环境难以切换
-- **建议**: 使用 Vite 的 `.env` / `.env.production` 机制管理环境变量
+- 头像上传、配额管理、生成历史导出
+- 管理员后台：用户管理、任务监控面板
 
 ---
 
-## 建议优先执行顺序
+## 建议执行路线
 
-1. **修复安全问题** — 轮换数据库密码、修复路径穿越、敏感配置排除出 git
-2. **解除性能瓶颈** — DB mutex 改为 per-session、generation lock 改为 Semaphore、request ID 改为 UUID
-3. **加 Docker Compose** — 一键启动整个开发环境
-4. **前端升级 TypeScript + i18n**
-5. **引入 SSE 替代轮询**
-6. **增加 Prompt 模板和图片画廊**
+```
+测试 → Docker 化 → CI → 存储分离 → 可观测性
+```
+
+前三个是工程基本功，补完之后项目在中级社招简历上就立得住。后面的按时间精力选做。
