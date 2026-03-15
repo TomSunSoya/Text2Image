@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
 import router from '@/router'
 import { ElMessage } from 'element-plus'
+import { clearStoredAuth, isTokenExpired } from '@/utils/jwt'
 
 function normalizeUserInfo(rawUser, fallbackUsername = '') {
   const user = rawUser || {}
@@ -20,9 +21,15 @@ export const useAuthStore = defineStore('auth', () => {
   const userInfo = ref(JSON.parse(localStorage.getItem('userInfo') || 'null'))
   const isLoggingIn = ref(false)
 
-  const isAuthenticated = computed(() => !!token.value)
+  const isAuthenticated = computed(() => !!token.value && !isTokenExpired(token.value))
   const username = computed(() => userInfo.value?.username || '')
   const nickname = computed(() => userInfo.value?.nickname || username.value)
+
+  function resetAuthState() {
+    token.value = ''
+    userInfo.value = null
+    clearStoredAuth()
+  }
 
   async function login(credentials) {
     isLoggingIn.value = true
@@ -68,10 +75,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout() {
-    token.value = ''
-    userInfo.value = null
-    localStorage.removeItem('token')
-    localStorage.removeItem('userInfo')
+    resetAuthState()
     ElMessage.success('已退出登录')
     router.push('/login')
   }
@@ -81,6 +85,12 @@ export const useAuthStore = defineStore('auth', () => {
     const savedUserInfo = localStorage.getItem('userInfo')
 
     if (!savedToken || !savedUserInfo) {
+      resetAuthState()
+      return false
+    }
+
+    if (isTokenExpired(savedToken)) {
+      resetAuthState()
       return false
     }
 
@@ -90,10 +100,7 @@ export const useAuthStore = defineStore('auth', () => {
       userInfo.value = normalizeUserInfo(parsed)
       return true
     } catch {
-      token.value = ''
-      userInfo.value = null
-      localStorage.removeItem('token')
-      localStorage.removeItem('userInfo')
+      resetAuthState()
       return false
     }
   }

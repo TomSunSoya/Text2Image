@@ -61,3 +61,6 @@ PythonProject/**/*.bmp
 **/*.pdb
 **/*.ilk
 
+# Backend sensitive config
+Backend/config.json
+

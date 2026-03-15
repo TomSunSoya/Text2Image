@@ -92,11 +92,7 @@ void fillDirectError(const drogon::HttpResponsePtr& resp,
                      std::string code,
                      std::string message)
 {
-    ServiceError error;
-    error.status = status;
-    error.code = std::move(code);
-    error.message = std::move(message);
-    fillServiceError(resp, error);
+    fillServiceError(resp, ServiceError{status, std::move(code), std::move(message)});
 }
 
 std::optional<int64_t> resolveUserId(const drogon::HttpRequestPtr& req,
@@ -159,10 +155,9 @@ void ImageController::create(const drogon::HttpRequestPtr& req,
         const auto payload = json::parse(req->getBody());
 
         ImageService service;
-        ServiceError error;
-        auto result = service.create(*userId, payload, error);
+        auto result = service.create(*userId, payload);
         if (!result) {
-            fillServiceError(resp, error);
+            fillServiceError(resp, result.error());
             callback(resp);
             return;
         }
@@ -197,10 +192,9 @@ void ImageController::listMy(const drogon::HttpRequestPtr& req,
     const int size = parsePositiveInt(req->getParameter("size"), 10);
 
     ImageService service;
-    ServiceError error;
-    auto result = service.listMy(*userId, page, size, error);
+    auto result = service.listMy(*userId, page, size);
     if (!result) {
-        fillServiceError(resp, error);
+        fillServiceError(resp, result.error());
         callback(resp);
         return;
     }
@@ -227,10 +221,9 @@ void ImageController::listMyByStatus(const drogon::HttpRequestPtr& req,
     const int size = parsePositiveInt(req->getParameter("size"), 10);
 
     ImageService service;
-    ServiceError error;
-    auto result = service.listMyByStatus(*userId, status, page, size, error);
+    auto result = service.listMyByStatus(*userId, status, page, size);
     if (!result) {
-        fillServiceError(resp, error);
+        fillServiceError(resp, result.error());
         callback(resp);
         return;
     }
@@ -254,10 +247,9 @@ void ImageController::getById(const drogon::HttpRequestPtr& req,
     }
 
     ImageService service;
-    ServiceError error;
-    auto result = service.getById(*userId, id, error, true);
+    auto result = service.getById(*userId, id, true);
     if (!result) {
-        fillServiceError(resp, error);
+        fillServiceError(resp, result.error());
         callback(resp);
         return;
     }
@@ -281,10 +273,9 @@ void ImageController::getBinaryById(const drogon::HttpRequestPtr& req,
     }
 
     ImageService service;
-    ServiceError error;
-    auto result = service.getBinaryById(*userId, id, error);
+    auto result = service.getBinaryById(*userId, id);
     if (!result) {
-        fillServiceError(resp, error);
+        fillServiceError(resp, result.error());
         callback(resp);
         return;
     }
@@ -309,10 +300,9 @@ void ImageController::getStatusById(const drogon::HttpRequestPtr& req,
     }
 
     ImageService service;
-    ServiceError error;
-    auto result = service.getById(*userId, id, error, false);
+    auto result = service.getById(*userId, id, false);
     if (!result) {
-        fillServiceError(resp, error);
+        fillServiceError(resp, result.error());
         callback(resp);
         return;
     }
@@ -336,9 +326,9 @@ void ImageController::deleteById(const drogon::HttpRequestPtr& req,
     }
 
     ImageService service;
-    ServiceError error;
-    if (!service.deleteById(*userId, id, error)) {
-        fillServiceError(resp, error);
+    auto result = service.deleteById(*userId, id);
+    if (!result) {
+        fillServiceError(resp, result.error());
         callback(resp);
         return;
     }
@@ -360,10 +350,9 @@ void ImageController::cancelById(const drogon::HttpRequestPtr& req, std::functio
 	}
 
 	ImageService service;
-	ServiceError error;
-	auto result = service.cancelById(*userId, id, error);
+	auto result = service.cancelById(*userId, id);
 	if (!result) {
-        fillServiceError(resp, error);
+        fillServiceError(resp, result.error());
         callback(resp);
         return;
     }
@@ -385,10 +374,9 @@ void ImageController::retryById(const drogon::HttpRequestPtr & req, std::functio
     }
 
 	ImageService service;
-	ServiceError error;
-	auto result = service.retryById(*userId, id, error);
+	auto result = service.retryById(*userId, id);
 	if (!result) {
-        fillServiceError(resp, error);
+        fillServiceError(resp, result.error());
         callback(resp);
         return;
     }

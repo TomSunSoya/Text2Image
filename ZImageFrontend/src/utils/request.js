@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '@/router'
+import { clearStoredAuth, isTokenExpired } from '@/utils/jwt'
 
 const request = axios.create({
   baseURL: '/api',
@@ -59,6 +60,13 @@ request.interceptors.request.use(
   config => {
     const token = localStorage.getItem('token')
     if (token) {
+      if (isTokenExpired(token)) {
+        clearStoredAuth()
+        ElMessage.error('登录已过期，请重新登录')
+        router.push('/login')
+        return Promise.reject(new Error('登录已过期，请重新登录'))
+      }
+
       config.headers['Authorization'] = `Bearer ${token}`
     }
     return config
@@ -105,8 +113,7 @@ request.interceptors.response.use(
 
     if (error.response?.status === 401) {
       ElMessage.error(message || '登录已过期，请重新登录')
-      localStorage.removeItem('token')
-      localStorage.removeItem('userInfo')
+      clearStoredAuth()
       router.push('/login')
       return Promise.reject(error)
     }
