@@ -193,6 +193,7 @@ import { ElMessage } from 'element-plus'
 import { Picture, Download, CopyDocument } from '@element-plus/icons-vue'
 import { imageApi } from '@/api/image'
 import { useImageStore } from '@/stores/image'
+import { subscribeTaskEvents } from '@/utils/taskSocket'
 import {
   canCancelImageTask,
   canDownloadImageTask,
@@ -201,7 +202,6 @@ import {
   normalizeImageStatus
 } from '@/utils/imageTask'
 
-const POLL_INTERVAL_MS = 2000
 const POLL_TIMEOUT_MS = 8 * 60 * 1000
 
 const imageStore = useImageStore()
@@ -214,8 +214,13 @@ const healthStatus = ref('unknown')
 const currentImage = ref(null)
 const imageBinaryLoading = ref(false)
 const binaryImageUrl = ref('')
-let activePollToken = 0
 let activeBinaryToken = 0
+let activeTaskToken = 0
+let socketUnsubscribe = null
+let progressTimer = 0
+let taskTimeoutId = 0
+let taskResolve = null
+let taskReject = null
 
 const statusTagType = computed(() => {
   return getImageStatusTagType(currentImage.value?.status)
@@ -225,14 +230,14 @@ const loadingStatusText = computed(() => {
   const status = normalizeImageStatus(currentImage.value?.status)
 
   if (status === 'queued' || status === 'pending') {
-    return 'Task queued, waiting for worker...'
+    return 'Task queued, waiting for server push...'
   }
 
   if (status === 'generating') {
-    return 'Image is generating, polling latest status...'
+    return 'Image is generating, waiting for worker update...'
   }
 
-  return 'Task queued/running, polling status...'
+  return 'Waiting for task update from server...'
 })
 
 const currentTaskCanCancel = computed(() => canCancelImageTask(currentImage.value?.status))
@@ -286,12 +291,86 @@ const imageDataUrl = computed(() => {
   return ''
 })
 
-const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 const revokeBinaryImageUrl = () => {
   if (binaryImageUrl.value && binaryImageUrl.value.startsWith('blob:')) {
     URL.revokeObjectURL(binaryImageUrl.value)
   }
   binaryImageUrl.value = ''
+}
+
+const clearTaskTimeout = () => {
+  if (taskTimeoutId) {
+    window.clearTimeout(taskTimeoutId)
+    taskTimeoutId = 0
+  }
+}
+
+const clearTaskWaiter = () => {
+  clearTaskTimeout()
+  const reject = taskReject
+  taskResolve = null
+  taskReject = null
+  if (reject) {
+    reject(new Error('superseded'))
+  }
+}
+
+const resolveTaskWaiter = (task) => {
+  if (!taskResolve) {
+    return
+  }
+
+  const resolve = taskResolve
+  clearTaskWaiter()
+  resolve(task)
+}
+
+const rejectTaskWaiter = (error) => {
+  if (!taskReject) {
+    return
+  }
+
+  const reject = taskReject
+  clearTaskWaiter()
+  reject(error)
+}
+
+const stopProgressAnimation = () => {
+  if (progressTimer) {
+    window.clearInterval(progressTimer)
+    progressTimer = 0
+  }
+}
+
+const syncProgressFromStatus = (status) => {
+  const normalized = normalizeImageStatus(status)
+  if (normalized === 'queued' || normalized === 'pending') {
+    progress.value = Math.max(progress.value, 15)
+    return
+  }
+
+  if (normalized === 'generating') {
+    progress.value = Math.max(progress.value, 70)
+    return
+  }
+
+  if (isImageTerminalStatus(normalized)) {
+    progress.value = 100
+  }
+}
+
+const startProgressAnimation = () => {
+  stopProgressAnimation()
+
+  progressTimer = window.setInterval(() => {
+    if (!loading.value) {
+      return
+    }
+
+    const status = normalizeImageStatus(currentImage.value?.status)
+    const cap = status === 'generating' ? 92 : 45
+    progress.value = Math.min(cap, progress.value + 1)
+  }, 800)
 }
 
 const resetBinaryPreview = () => {
@@ -328,6 +407,16 @@ const loadBinaryPreview = async (image) => {
   }
 }
 
+const applyTaskUpdate = (task) => {
+  currentImage.value = {
+    ...(currentImage.value || {}),
+    ...(task || {})
+  }
+  imageStore.setCurrentImage(currentImage.value)
+  syncProgressFromStatus(currentImage.value?.status)
+  return currentImage.value
+}
+
 const checkHealth = async () => {
   try {
     const response = await imageApi.checkHealth()
@@ -338,58 +427,56 @@ const checkHealth = async () => {
   }
 }
 
-const pollImageTask = async (imageId, pollToken) => {
-  const start = Date.now()
-
-  while (true) {
-    if (pollToken !== activePollToken) {
-      throw new Error('poll cancelled')
+const waitForTaskCompletion = (taskToken) => new Promise((resolve, reject) => {
+  taskResolve = resolve
+  taskReject = reject
+  clearTaskTimeout()
+  taskTimeoutId = window.setTimeout(() => {
+    if (taskToken !== activeTaskToken) {
+      return
     }
 
-    const elapsed = Date.now() - start
-    if (elapsed > POLL_TIMEOUT_MS) {
-      throw new Error('generation timeout, please check history later')
-    }
+    rejectTaskWaiter(new Error('generation timeout, please check history later'))
+  }, POLL_TIMEOUT_MS)
+})
 
-    const response = await imageApi.getImageStatus(imageId)
-    const latest = {
-      ...(currentImage.value || {}),
-      ...(response?.data || {}),
-      id: imageId,
-      prompt: form.prompt,
-      negativePrompt: form.negativePrompt,
-      numSteps: form.numSteps,
-      width: form.width,
-      height: form.height,
-      seed: form.seed
-    }
-    currentImage.value = latest
-
-    const status = normalizeImageStatus(latest.status)
-    if (isImageTerminalStatus(status)) {
-      progress.value = 100
-      return latest
-    }
-
-    const ratio = Math.min(elapsed / POLL_TIMEOUT_MS, 1)
-    progress.value = Math.max(5, Math.min(95, Math.floor(ratio * 90) + 5))
-
-    await wait(POLL_INTERVAL_MS)
+const handleTaskSocketEvent = (event) => {
+  if (event?.type !== 'image.task.updated') {
+    return
   }
+
+  const task = event.task || {}
+  if (!task.id) {
+    return
+  }
+
+  if (currentImage.value?.id !== task.id) {
+    return
+  }
+
+  const latest = applyTaskUpdate(task)
+  const status = normalizeImageStatus(latest.status)
+  if (!isImageTerminalStatus(status)) {
+    return
+  }
+
+  stopProgressAnimation()
+  resolveTaskWaiter(latest)
 }
 
 const handleGenerate = async () => {
-  const pollToken = ++activePollToken
-  let generationStarted = false
+  const taskToken = ++activeTaskToken
 
   try {
     await formRef.value.validate()
-    generationStarted = true
     loading.value = true
     cancelling.value = false
-    progress.value = 5
+    progress.value = 10
     currentImage.value = null
+    imageStore.setCurrentImage(null)
     resetBinaryPreview()
+    clearTaskWaiter()
+    startProgressAnimation()
 
     const submitResponse = await imageApi.generateImage(form)
     const queuedTask = submitResponse?.data || {}
@@ -399,7 +486,7 @@ const handleGenerate = async () => {
       throw new Error('missing queued task id from backend')
     }
 
-    currentImage.value = {
+    applyTaskUpdate({
       ...queuedTask,
       prompt: form.prompt,
       negativePrompt: form.negativePrompt,
@@ -407,9 +494,18 @@ const handleGenerate = async () => {
       width: form.width,
       height: form.height,
       seed: form.seed
+    })
+
+    const initialStatus = normalizeImageStatus(currentImage.value?.status)
+    const finalImage = isImageTerminalStatus(initialStatus)
+      ? currentImage.value
+      : await waitForTaskCompletion(taskToken)
+    if (taskToken !== activeTaskToken) {
+      return
     }
 
-    const finalImage = await pollImageTask(imageId, pollToken)
+    stopProgressAnimation()
+    progress.value = 100
     imageStore.setCurrentImage(finalImage)
     currentImage.value = finalImage
 
@@ -432,18 +528,20 @@ const handleGenerate = async () => {
 
     throw new Error(finalImage.errorMessage || 'image generation failed')
   } catch (error) {
-    if (pollToken !== activePollToken) {
+    if (taskToken !== activeTaskToken) {
       return
     }
 
-    if (!generationStarted) {
+    if (!loading.value) {
       return
     }
 
+    clearTaskWaiter()
+    stopProgressAnimation()
     progress.value = 0
     ElMessage.error('Generation failed: ' + (error?.message || 'unknown error'))
   } finally {
-    if (pollToken === activePollToken) {
+    if (taskToken === activeTaskToken) {
       loading.value = false
       cancelling.value = false
     }
@@ -459,14 +557,11 @@ const handleCancelCurrentTask = async () => {
 
   try {
     const response = await imageApi.cancelImage(currentImage.value.id)
-    activePollToken += 1
-    progress.value = 100
+    stopProgressAnimation()
     loading.value = false
-    currentImage.value = {
-      ...(currentImage.value || {}),
-      ...(response?.data || {})
-    }
-    imageStore.setCurrentImage(currentImage.value)
+    progress.value = 100
+    const latest = applyTaskUpdate(response?.data || {})
+    resolveTaskWaiter(latest)
     ElMessage.warning('Task cancelled')
   } catch (error) {
     console.error('Cancel task failed:', error)
@@ -476,11 +571,13 @@ const handleCancelCurrentTask = async () => {
 }
 
 const handleReset = () => {
-  activePollToken += 1
+  activeTaskToken += 1
   loading.value = false
   cancelling.value = false
   progress.value = 0
   currentImage.value = null
+  clearTaskWaiter()
+  stopProgressAnimation()
   resetBinaryPreview()
   imageStore.setCurrentImage(null)
   formRef.value?.resetFields()
@@ -524,6 +621,7 @@ const handleCopyPrompt = () => {
 
 onMounted(() => {
   checkHealth()
+  socketUnsubscribe = subscribeTaskEvents(handleTaskSocketEvent)
 })
 
 watch(
@@ -551,7 +649,11 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  activePollToken += 1
+  activeTaskToken += 1
+  clearTaskWaiter()
+  stopProgressAnimation()
+  socketUnsubscribe?.()
+  socketUnsubscribe = null
   resetBinaryPreview()
 })
 </script>

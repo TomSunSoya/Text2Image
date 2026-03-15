@@ -25,6 +25,8 @@ constexpr const char* kColumns =
     "error_message, generation_time, created_at, started_at, completed_at, "
     "cancelled_at, lease_expires_at";
 
+constexpr int kColumnCount = 25;
+
 constexpr const char* kImageTable = "image_generations";
 
 std::string imageSchemaName()
@@ -218,6 +220,36 @@ std::vector<models::ImageGeneration> collectResultRows(mysqlx::SqlResult& result
     return images;
 }
 
+ImagePageResult collectPagedResultRows(mysqlx::SqlResult& result)
+{
+    ImagePageResult page;
+
+    while (true) {
+        auto row = result.fetchOne();
+        if (!row) {
+            break;
+        }
+
+        if (page.total_elements == 0 && !row[kColumnCount].isNull()) {
+            page.total_elements = static_cast<int64_t>(row[kColumnCount].get<uint64_t>());
+        }
+
+        page.content.push_back(rowToImageGeneration(row));
+    }
+
+    return page;
+}
+
+int64_t extractCount(mysqlx::SqlResult& result)
+{
+    auto row = result.fetchOne();
+    if (!row || row[0].isNull()) {
+        return 0;
+    }
+
+    return static_cast<int64_t>(row[0].get<uint64_t>());
+}
+
 bool isTerminalStatus(const std::string& status)
 {
     return status == "success" || status == "failed" || status == "cancelled" || status == "timeout";
@@ -368,7 +400,7 @@ int64_t ImageRepo::insert(const models::ImageGeneration& generation)
     return static_cast<int64_t>(idRow[0].get<uint64_t>());
 }
 
-std::vector<models::ImageGeneration> ImageRepo::findByUserId(int64_t userId, int page, int size)
+ImagePageResult ImageRepo::findByUserId(int64_t userId, int page, int size)
 {
     ensureTable();
 
@@ -378,18 +410,27 @@ std::vector<models::ImageGeneration> ImageRepo::findByUserId(int64_t userId, int
 
 
     auto result = database::DBManager::threadSession().sql(
-        std::string("SELECT ") + kColumns +
+        std::string("SELECT ") + kColumns + ", COUNT(*) OVER() AS total_count" +
         " FROM " + imageTableName() + " WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?")
         .bind(userId, safeSize, offset)
         .execute();
 
-    return collectResultRows(result);
+    auto pageResult = collectPagedResultRows(result);
+    if (pageResult.content.empty() && offset > 0) {
+        auto countResult = database::DBManager::threadSession().sql(
+            "SELECT COUNT(*) FROM " + imageTableName() + " WHERE user_id = ?")
+            .bind(userId)
+            .execute();
+        pageResult.total_elements = extractCount(countResult);
+    }
+
+    return pageResult;
 }
 
-std::vector<models::ImageGeneration> ImageRepo::findByUserIdAndStatus(int64_t userId,
-                                                                       const std::string& status,
-                                                                       int page,
-                                                                       int size)
+ImagePageResult ImageRepo::findByUserIdAndStatus(int64_t userId,
+                                                 const std::string& status,
+                                                 int page,
+                                                 int size)
 {
     ensureTable();
 
@@ -399,46 +440,21 @@ std::vector<models::ImageGeneration> ImageRepo::findByUserIdAndStatus(int64_t us
 
 
     auto result = database::DBManager::threadSession().sql(
-        std::string("SELECT ") + kColumns +
+        std::string("SELECT ") + kColumns + ", COUNT(*) OVER() AS total_count" +
         " FROM " + imageTableName() + " WHERE user_id = ? AND status = ? ORDER BY id DESC LIMIT ? OFFSET ?")
         .bind(userId, status, safeSize, offset)
         .execute();
 
-    return collectResultRows(result);
-}
-
-int64_t ImageRepo::countByUserId(int64_t userId)
-{
-    ensureTable();
-
-    auto result = database::DBManager::threadSession()
-        .sql("SELECT COUNT(*) FROM " + imageTableName() + " WHERE user_id = ?")
-        .bind(userId)
-        .execute();
-
-    auto row = result.fetchOne();
-    if (!row || row[0].isNull()) {
-        return 0;
+    auto pageResult = collectPagedResultRows(result);
+    if (pageResult.content.empty() && offset > 0) {
+        auto countResult = database::DBManager::threadSession().sql(
+            "SELECT COUNT(*) FROM " + imageTableName() + " WHERE user_id = ? AND status = ?")
+            .bind(userId, status)
+            .execute();
+        pageResult.total_elements = extractCount(countResult);
     }
 
-    return static_cast<int64_t>(row[0].get<uint64_t>());
-}
-
-int64_t ImageRepo::countByUserIdAndStatus(int64_t userId, const std::string& status)
-{
-    ensureTable();
-
-    auto result = database::DBManager::threadSession()
-        .sql("SELECT COUNT(*) FROM " + imageTableName() + " WHERE user_id = ? AND status = ?")
-        .bind(userId, status)
-        .execute();
-
-    auto row = result.fetchOne();
-    if (!row || row[0].isNull()) {
-        return 0;
-    }
-
-    return static_cast<int64_t>(row[0].get<uint64_t>());
+    return pageResult;
 }
 
 std::optional<models::ImageGeneration> ImageRepo::findByIdAndUserId(int64_t id, int64_t userId)

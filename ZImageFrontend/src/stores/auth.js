@@ -4,6 +4,7 @@ import { authApi } from '@/api/auth'
 import router from '@/router'
 import { ElMessage } from 'element-plus'
 import { clearStoredAuth, isTokenExpired } from '@/utils/jwt'
+import { closeTaskSocket } from '@/utils/taskSocket'
 
 function normalizeUserInfo(rawUser, fallbackUsername = '') {
   const user = rawUser || {}
@@ -29,6 +30,7 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = ''
     userInfo.value = null
     clearStoredAuth()
+    closeTaskSocket()
   }
 
   async function login(credentials) {
