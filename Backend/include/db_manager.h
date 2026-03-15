@@ -28,6 +28,7 @@ public:
 	static mysqlx::Schema threadSchema();
 
 private:
+	static void resetThreadSession();
 	static std::unique_ptr<mysqlx::Session> g_sess;
 	static MysqlConfig g_cfg;
 };

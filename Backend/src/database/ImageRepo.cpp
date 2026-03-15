@@ -1,9 +1,11 @@
 #include "ImageRepo.h"
 
 #include <chrono>
-#include <cstdio>
 #include <ctime>
 #include <format>
+#include <iomanip>
+#include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -78,13 +80,11 @@ std::optional<std::chrono::system_clock::time_point> parseDbTime(std::string val
     }
 
     std::tm tm{};
-    if (std::sscanf(value.c_str(), "%d-%d-%d %d:%d:%d",
-            &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
-            &tm.tm_hour, &tm.tm_min, &tm.tm_sec) != 6) {
+    std::istringstream iss(value);
+    iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+    if (iss.fail()) {
         return std::nullopt;
     }
-    tm.tm_year -= 1900;
-    tm.tm_mon -= 1;
 
     const auto asTimeT = std::mktime(&tm);
     if (asTimeT == -1) {
@@ -411,7 +411,6 @@ int64_t ImageRepo::countByUserId(int64_t userId)
 {
     ensureTable();
 
-
     auto result = database::DBManager::threadSession()
         .sql("SELECT COUNT(*) FROM " + imageTableName() + " WHERE user_id = ?")
         .bind(userId)
@@ -429,7 +428,6 @@ int64_t ImageRepo::countByUserIdAndStatus(int64_t userId, const std::string& sta
 {
     ensureTable();
 
-
     auto result = database::DBManager::threadSession()
         .sql("SELECT COUNT(*) FROM " + imageTableName() + " WHERE user_id = ? AND status = ?")
         .bind(userId, status)
@@ -446,7 +444,6 @@ int64_t ImageRepo::countByUserIdAndStatus(int64_t userId, const std::string& sta
 std::optional<models::ImageGeneration> ImageRepo::findByIdAndUserId(int64_t id, int64_t userId)
 {
     ensureTable();
-
 
     auto result = database::DBManager::threadSession().sql(
         std::string("SELECT ") + kColumns +
@@ -466,7 +463,6 @@ bool ImageRepo::deleteByIdAndUserId(int64_t id, int64_t userId)
 {
     ensureTable();
 
-
     auto result = database::DBManager::threadSession()
         .sql("DELETE FROM " + imageTableName() + " WHERE id = ? AND user_id = ?")
         .bind(id, userId)
@@ -478,7 +474,6 @@ bool ImageRepo::deleteByIdAndUserId(int64_t id, int64_t userId)
 std::optional<models::ImageGeneration> ImageRepo::findByRequestIdAndUserId(const std::string& requestId, int64_t userId)
 {
 	ensureTable();
-
 
     auto result = database::DBManager::threadSession().sql(
         std::string("SELECT ") + kColumns +
@@ -547,7 +542,6 @@ bool ImageRepo::finishClaimedTask(const models::ImageGeneration& generation)
 {
     ensureTable();
 
-
     auto result = database::DBManager::threadSession().sql(
         "UPDATE " + imageTableName() +
         " SET status = ?, image_url = ?, image_base64 = ?, error_message = ?, generation_time = ?, completed_at = ?, cancelled_at = ?,"
@@ -607,7 +601,6 @@ bool ImageRepo::cancelByIdAndUserId(int64_t id, int64_t userId, models::ImageGen
 bool ImageRepo::retryByIdAndUserId(int64_t id, int64_t userId, models::ImageGeneration* updated)
 {
     ensureTable();
-
 
     auto result = database::DBManager::threadSession().sql(
         "UPDATE " + imageTableName() +
