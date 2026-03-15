@@ -23,7 +23,9 @@ class DBManager {
 public:
 	static void init(const MysqlConfig& cfg);
 	static mysqlx::Session& session();
+	static mysqlx::Session& threadSession();
 	static mysqlx::Schema schema();
+	static mysqlx::Schema threadSchema();
 
 private:
 	static std::unique_ptr<mysqlx::Session> g_sess;

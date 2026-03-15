@@ -1,10 +1,12 @@
 import asyncio
-import io
+import contextlib
 import logging
 import os
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -43,9 +45,12 @@ PORT = read_int_env("MODEL_SERVICE_PORT", 8081)
 LOG_DIR = os.getenv("MODEL_SERVICE_LOG_DIR", "./logs")
 TEMP_DIR = os.getenv("MODEL_SERVICE_TEMP_DIR", "./temp")
 ALLOW_ORIGINS = read_list_env("MODEL_SERVICE_ALLOW_ORIGINS", ["*"])
+MAX_CONCURRENT_GENERATIONS = max(1, read_int_env("MODEL_SERVICE_MAX_CONCURRENT_GENERATIONS", 1))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-os.makedirs(TEMP_DIR, exist_ok=True)
+TEMP_PATH = Path(TEMP_DIR).resolve()
+
+os.makedirs(TEMP_PATH, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 logging.basicConfig(
@@ -58,6 +63,13 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_temp_file(filename: str) -> Path:
+    candidate = (TEMP_PATH / filename).resolve()
+    if candidate.parent != TEMP_PATH or candidate.name != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    return candidate
 
 
 class GenerateRequest(BaseModel):
@@ -98,7 +110,7 @@ class ZImageModelService:
         self.pipe = None
         self.last_error = ""
         self._load_lock = threading.Lock()
-        self._generation_lock = threading.Lock()
+        self._generation_semaphore = threading.Semaphore(MAX_CONCURRENT_GENERATIONS)
         self._state_lock = threading.Lock()
         self._initialized = True
 
@@ -156,7 +168,7 @@ class ZImageModelService:
 
             self._set_loading(True)
             self._set_last_error("")
-            logger.info(f"Loading model from {LOCAL_MODEL_PATH}")
+            logger.info("Loading model from %s", LOCAL_MODEL_PATH)
 
             try:
                 self.pipe = ZImagePipeline.from_pretrained(
@@ -164,12 +176,12 @@ class ZImageModelService:
                     torch_dtype=torch.bfloat16,
                     local_files_only=True
                 ).to(DEVICE)
-                logger.info(f"Model loaded! Device: {DEVICE}")
+                logger.info("Model loaded. Device: %s", DEVICE)
                 return True
             except Exception as e:
                 self.pipe = None
                 self._set_last_error(str(e))
-                logger.error(f"Failed to load model: {e}")
+                logger.exception("Failed to load model")
                 return False
             finally:
                 self._set_loading(False)
@@ -181,7 +193,7 @@ class ZImageModelService:
                 detail = self.get_health_snapshot().get("detail") or "model is unavailable"
                 raise RuntimeError(f"Model not loaded: {detail}")
 
-        with self._generation_lock:
+        with self._generation_semaphore:
             self._mark_generation_started()
             start_time = datetime.now()
             request_id = request.request_id or str(uuid.uuid4())
@@ -192,7 +204,7 @@ class ZImageModelService:
                 if request.seed is not None:
                     generator = torch.Generator(device=DEVICE).manual_seed(request.seed)
 
-                logger.info(f"Generating image for {request.prompt[:50]}...")
+                logger.info("Generating image for request_id=%s prompt=%s", request_id, request.prompt[:50])
 
                 result = self.pipe(
                     prompt=request.prompt,
@@ -210,13 +222,10 @@ class ZImageModelService:
                 generation_time = (end_time - start_time).total_seconds()
 
                 filename = f"{request_id}.png"
-                filepath = os.path.join(TEMP_DIR, filename)
+                filepath = resolve_temp_file(filename)
                 image.save(filepath)
 
-                buffered = io.BytesIO()
-                image.save(buffered, format="PNG")
-
-                logger.info(f"Generate image successfully: {request_id}, time: {generation_time}")
+                logger.info("Generated image successfully: request_id=%s, time=%s", request_id, generation_time)
 
                 return {
                     "status": "success",
@@ -229,16 +238,32 @@ class ZImageModelService:
 
             except Exception as e:
                 self._set_last_error(str(e))
-                logger.error(f"Failed to generate image: {e}")
+                logger.exception("Failed to generate image for request_id=%s", request_id)
                 raise
             finally:
                 self._mark_generation_finished()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    cleanup_task = asyncio.create_task(cleanup_temp_files())
+    if not model_service.initialize():
+        logger.warning("Model preload failed: %s", model_service.last_error or "unknown error")
+    logger.info("Model service started completely")
+
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cleanup_task
 
 
 app = FastAPI(
     title="Z-Image Turbo Model Service",
     description="Z-Image Turbo Model Image Generator",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -260,6 +285,7 @@ async def root():
         "status": health["status"],
         "model_loaded": health["model_loaded"],
         "device": DEVICE,
+        "max_concurrent_generations": MAX_CONCURRENT_GENERATIONS,
     }
 
 
@@ -274,6 +300,7 @@ async def health_check():
         "is_loading": health["is_loading"],
         "is_generating": health["is_generating"],
         "active_generations": health["active_generations"],
+        "max_concurrent_generations": MAX_CONCURRENT_GENERATIONS,
     }
     if health["detail"]:
         body["detail"] = health["detail"]
@@ -290,17 +317,17 @@ async def generate_image(request: GenerateRequest):
     except RuntimeError as e:
         if str(e).startswith("Model not loaded:"):
             raise HTTPException(status_code=503, detail=str(e))
-        logger.error(f"Error on API: {e}")
+        logger.exception("Runtime error on /generate")
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"Error on API: {e}")
+        logger.exception("Unhandled error on /generate")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/temp/{filename}")
 async def get_temp_image(filename: str):
-    filepath = os.path.join(TEMP_DIR, filename)
-    if not os.path.exists(filepath):
+    filepath = resolve_temp_file(filename)
+    if not filepath.exists():
         raise HTTPException(status_code=404, detail="Image not found")
 
     from fastapi.responses import FileResponse
@@ -313,29 +340,20 @@ async def cleanup_temp_files(max_age_hours: int = 24):
     while True:
         try:
             current_time = time.time()
-            for filename in os.listdir(TEMP_DIR):
-                filepath = os.path.join(TEMP_DIR, filename)
-                if os.path.isfile(filepath):
-                    file_age = current_time - os.path.getmtime(filepath)
+            for filepath in TEMP_PATH.iterdir():
+                if filepath.is_file():
+                    file_age = current_time - filepath.stat().st_mtime
                     if file_age > max_age_hours * 3600:
-                        os.remove(filepath)
-                        logger.info(f"Deleted temp file: {filepath}")
+                        filepath.unlink()
+                        logger.info("Deleted temp file: %s", filepath)
         except Exception as e:
-            logger.error(f"Failed to delete temp file: {e}")
+            logger.exception("Failed to delete temp files")
 
         await asyncio.sleep(3600)
 
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(cleanup_temp_files())
-    if not model_service.initialize():
-        logger.warning(f"Model preload failed: {model_service.last_error or 'unknown error'}")
-    logger.info("Model service started completely")
-
-
 if __name__ == "__main__":
-    logger.info(f"Model service started, port: {PORT}")
+    logger.info("Model service started, port: %s", PORT)
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
 
 

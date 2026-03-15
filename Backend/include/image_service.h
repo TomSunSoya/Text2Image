@@ -1,14 +1,14 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
+#include <expected>
 #include <string>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
-#include "auth_service.h"
 #include "image_generation.h"
+#include "service_error.h"
 
 struct ImageCreateResult {
     models::ImageGeneration generation;
@@ -38,23 +38,21 @@ class ImageService {
 public:
 	static void bootstrapWorkers();
 
-    std::optional<ImageCreateResult> create(int64_t userId,
-                                            const nlohmann::json& payload,
-                                            ServiceError& error) const;
+    std::expected<ImageCreateResult, ServiceError> create(int64_t userId,
+                                                          const nlohmann::json& payload) const;
 
-    std::optional<ImageListResult> listMy(int64_t userId, int page, int size, ServiceError& error) const;
-    std::optional<ImageListResult> listMyByStatus(int64_t userId,
-                                                  const std::string& status,
-                                                  int page,
-                                                  int size,
-                                                  ServiceError& error) const;
+    std::expected<ImageListResult, ServiceError> listMy(int64_t userId, int page, int size) const;
+    std::expected<ImageListResult, ServiceError> listMyByStatus(int64_t userId,
+                                                                const std::string& status,
+                                                                int page, int size) const;
 
-    std::optional<ImageGetResult> getById(int64_t userId, int64_t id, ServiceError& error, bool includeImagePayload = true) const;
-	std::optional<ImageGetResult> cancelById(int64_t userId, int64_t id, ServiceError& error) const;
-	std::optional<ImageGetResult> retryById(int64_t userId, int64_t id, ServiceError& error) const;
-	std::optional<ImageBinaryResult> getBinaryById(int64_t userId, int64_t id, ServiceError& error) const;
+    std::expected<ImageGetResult, ServiceError> getById(int64_t userId, int64_t id,
+                                                        bool includeImagePayload = true) const;
+    std::expected<ImageGetResult, ServiceError> cancelById(int64_t userId, int64_t id) const;
+    std::expected<ImageGetResult, ServiceError> retryById(int64_t userId, int64_t id) const;
+    std::expected<ImageBinaryResult, ServiceError> getBinaryById(int64_t userId, int64_t id) const;
 
-    bool deleteById(int64_t userId, int64_t id, ServiceError& error) const;
+    std::expected<void, ServiceError> deleteById(int64_t userId, int64_t id) const;
 
     ImageHealthResult checkHealth() const;
 };

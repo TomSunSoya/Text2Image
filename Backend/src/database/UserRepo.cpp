@@ -13,7 +13,7 @@ static models::User rowToUser(const mysqlx::Row& row) {
 }
 
 static mysqlx::Table usersTable() {
-	return database::DBManager::schema().getTable("users", true);
+	return database::DBManager::threadSchema().getTable("users", true);
 }
 
 std::optional<models::User> UserRepo::findByUsername(const std::string& username)
