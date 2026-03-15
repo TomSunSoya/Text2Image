@@ -5,7 +5,7 @@
         <div class="card-header">
           <div>
             <span class="title">Generation History</span>
-            <p v-if="hasActiveTasks" class="subtitle">检测到进行中的任务，列表会自动刷新。</p>
+            <p v-if="hasActiveTasks" class="subtitle">检测到进行中的任务，等待服务端推送更新。</p>
           </div>
           <div class="header-actions">
             <el-select v-model="selectedStatus" size="small" style="width: 180px" @change="handleStatusChange">
@@ -173,6 +173,7 @@
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { imageApi } from '@/api/image'
+import { subscribeTaskEvents } from '@/utils/taskSocket'
 import {
   canCancelImageTask,
   canDownloadImageTask,
@@ -180,8 +181,6 @@ import {
   getImageStatusTagType,
   isImageActiveStatus
 } from '@/utils/imageTask'
-
-const AUTO_REFRESH_MS = 5000
 
 const tableRef = ref(null)
 const loading = ref(false)
@@ -203,7 +202,8 @@ const statusOptions = [
 
 const hasActiveTasks = computed(() => historyList.value.some(row => isImageActiveStatus(row.status)))
 
-let refreshTimer = null
+let socketUnsubscribe = null
+let refreshTimer = 0
 
 const normalizeRow = (item, previousRow = null) => {
   const merged = previousRow ? { ...previousRow, ...item } : { ...item }
@@ -245,25 +245,30 @@ const rebuildHistoryList = (rawList) => {
   return rawList.map(item => normalizeRow(item, previousMap.get(item.id)))
 }
 
-const clearAutoRefresh = () => {
+const clearRefreshTimer = () => {
   if (refreshTimer) {
-    window.clearInterval(refreshTimer)
+    window.clearTimeout(refreshTimer)
     refreshTimer = null
   }
 }
 
-const syncAutoRefresh = () => {
-  clearAutoRefresh()
-
-  if (!hasActiveTasks.value) {
+const scheduleSocketRefresh = () => {
+  if (loading.value || refreshTimer) {
     return
   }
 
-  refreshTimer = window.setInterval(() => {
-    if (!loading.value) {
-      loadHistory({ silent: true })
-    }
-  }, AUTO_REFRESH_MS)
+  refreshTimer = window.setTimeout(async () => {
+    refreshTimer = null
+    await loadHistory({ silent: true })
+  }, 150)
+}
+
+const handleTaskSocketEvent = (event) => {
+  if (event?.type !== 'image.task.updated') {
+    return
+  }
+
+  scheduleSocketRefresh()
 }
 
 const loadHistory = async (options = {}) => {
@@ -296,8 +301,6 @@ const loadHistory = async (options = {}) => {
     if (!silent) {
       loading.value = false
     }
-
-    syncAutoRefresh()
   }
 }
 
@@ -525,10 +528,13 @@ const formatDate = (dateString) => {
 
 onMounted(() => {
   loadHistory()
+  socketUnsubscribe = subscribeTaskEvents(handleTaskSocketEvent)
 })
 
 onBeforeUnmount(() => {
-  clearAutoRefresh()
+  clearRefreshTimer()
+  socketUnsubscribe?.()
+  socketUnsubscribe = null
   revokeAllObjectUrls()
 })
 </script>
