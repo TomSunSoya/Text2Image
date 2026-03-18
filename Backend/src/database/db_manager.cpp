@@ -57,6 +57,15 @@ void DBManager::init(const MysqlConfig& cfg)
 	g_sess = createSession(cfg);
 }
 
+const MysqlConfig& DBManager::config()
+{
+	if (g_cfg.host.empty()) {
+		throw std::runtime_error("DB not initialized");
+	}
+
+	return g_cfg;
+}
+
 mysqlx::Session& DBManager::session() {
 	if (!g_sess) throw std::runtime_error("DB not initialized");
 	return *g_sess;

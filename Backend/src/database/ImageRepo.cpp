@@ -13,7 +13,6 @@
 #include <mysqlx/xdevapi.h>
 #include <spdlog/spdlog.h>
 
-#include "Backend.h"
 #include "db_manager.h"
 
 namespace {
@@ -31,22 +30,17 @@ constexpr const char* kImageTable = "image_generations";
 
 std::string imageSchemaName()
 {
-    static const std::string dbName = [] {
-        const auto config = backend::loadConfig();
-        const auto value = config.at("database").at("database").get<std::string>();
-        if (value.empty()) {
-            throw std::runtime_error("database.database is empty in config.json");
-        }
-        return value;
-    }();
+    const auto& dbName = database::DBManager::config().database;
+    if (dbName.empty()) {
+        throw std::runtime_error("database name is empty");
+    }
 
     return dbName;
 }
 
 std::string imageTableName()
 {
-    static const std::string tableName = "`" + imageSchemaName() + "`.`" + std::string(kImageTable) + "`";
-    return tableName;
+    return "`" + imageSchemaName() + "`.`" + std::string(kImageTable) + "`";
 }
 
 std::string timeToDbString(const std::chrono::system_clock::time_point& tp)
