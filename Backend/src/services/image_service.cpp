@@ -38,7 +38,7 @@ TaskEngineConfig loadTaskEngineConfig()
         const auto backendConfig = backend::loadConfig();
         if (backendConfig.contains("task_engine") && backendConfig.at("task_engine").is_object()) {
             const auto& taskEngineConfig = backendConfig.at("task_engine");
-            config.workers = (std::max)(1, taskEngineConfig.value("workers", config.workers));
+            config.workers = (std::max)(0, taskEngineConfig.value("workers", config.workers));
             config.poll_interval_ms = (std::max)(100, taskEngineConfig.value("poll_interval_ms", config.poll_interval_ms));
             config.lease_seconds = (std::max)(30l, taskEngineConfig.value("lease_seconds", config.lease_seconds));
             config.max_retries = (std::max)(0, taskEngineConfig.value("max_retries", config.max_retries));
@@ -394,6 +394,11 @@ void workerLoop(std::stop_token stopToken, const std::string& workerId, const Ta
 void ensureWorkersStarted() {
     std::call_once(workerStartOnce(), [] {
 		const auto& cfg = taskEngineConfig();
+        if (cfg.workers <= 0) {
+            spdlog::info("ImageService task engine disabled");
+            return;
+        }
+
 		auto& workers = taskWorkers();
 		workers.reserve(cfg.workers);
 
