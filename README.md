@@ -62,7 +62,7 @@ Canonical task statuses currently used across the stack:
 ### 4.3 Health
 - backend liveness: `GET /health`
 - backend proxy model health: `GET /api/images/health`
-- model service health: `GET http://localhost:8081/health`
+- model service health: `GET http://<model-service-host>:8081/health`
 
 `ModelService` health now distinguishes:
 - `healthy`: model loaded and idle
@@ -86,6 +86,17 @@ Canonical task statuses currently used across the stack:
 - `VCPKG_ROOT` environment variable must point to your vcpkg installation (e.g. `C:\Users\you\tools\vcpkg`)
 
 Start the services in this order.
+
+### 6.0 Docker Compose
+```powershell
+copy .env.example .env
+docker compose up --build
+```
+
+Generated assets and data:
+- MySQL data is stored in the `mysql-data` named volume
+- backend image files are stored in the `backend-storage` named volume
+- model weights are expected under `ModelService/models/`
 
 ### 6.1 Model Service
 ```powershell
@@ -126,6 +137,10 @@ cp Backend/config.json.example Backend/config.json
 # edit Backend/config.json with your database password, JWT secret, etc.
 ```
 
+Primary files:
+- `Backend/config.json`
+- `.env.example` for Docker Compose defaults
+
 Important settings:
 - `server`: host, port, thread count
 - `database`: MySQL connection and pool settings
@@ -139,6 +154,11 @@ Environment-variable overrides are supported in the backend for common settings 
 - `DB_HOST` `DB_PORT` `DB_USERNAME` `DB_PASSWORD` `DB_NAME`
 - `JWT_SECRET`
 - `PYTHON_SERVICE_URL` `PYTHON_SERVICE_TIMEOUT_SECONDS`
+- `STORAGE_ROOT_DIR` `STORAGE_PUBLIC_URL_PREFIX` `STORAGE_EXTENSION`
+
+The backend is now container-friendly in two ways:
+- it can start from environment variables even if `config.json` is not mounted into the container
+- `BACKEND_CONFIG_PATH` can point to a mounted config file when you do want file-based configuration
 
 ### 7.2 Model Service
 Key environment variables:
@@ -147,6 +167,25 @@ Key environment variables:
 - `MODEL_SERVICE_ALLOW_ORIGINS`
 - `MODEL_SERVICE_LOG_DIR`
 - `MODEL_SERVICE_TEMP_DIR`
+- `MODEL_SERVICE_MAX_CONCURRENT_GENERATIONS`
+- `MODEL_SERVICE_TEMP_FILE_MAX_AGE_HOURS`
+- `MODEL_SERVICE_TEMP_FILE_CLEANUP_INTERVAL_SECONDS`
+
+Default container-oriented paths now assume:
+- model weights: `./models/Z-Image-Turbo` or a mounted path provided through `MODEL_PATH`
+- temp files: `./temp`
+- logs: `./logs`
+
+### 7.3 Docker Preparation
+The repository now includes:
+- `.env.example` with service-to-service defaults for containers
+- `.dockerignore` files at the repository root and per service
+- `docker-compose.yml` to orchestrate MySQL, MinIO, Backend, ModelService, and Frontend
+- `init-db/01-schema.sql` for first-run MySQL schema initialization
+- Dockerfiles for `Backend/`, `ModelService/`, and `ZImageFrontend/`
+- `ZImageFrontend/nginx.conf` for SPA hosting plus backend/API/WebSocket reverse proxy
+- `ModelService/requirements.txt` for Python image builds
+- frontend dev proxy targets configurable via `VITE_BACKEND_PROXY_TARGET` and `VITE_HEALTH_PROXY_TARGET`
 
 ## 8. Current State
 What is already in place:
@@ -155,6 +194,7 @@ What is already in place:
 - frontend supports polling, history, status filtering, cancel, retry, and protected download
 - model service health remains responsive during generation
 - image binaries are no longer required to be eagerly loaded in list responses
+- hard-coded workstation paths and committed plaintext backend credentials have been removed from the repo defaults
 
 What is not yet finished:
 - standardized automated tests across all three projects

@@ -10,6 +10,8 @@
 
 #ifdef _WIN32
 #include <Windows.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace backend {
@@ -26,7 +28,14 @@ std::filesystem::path executableDir()
     }
     return std::filesystem::path(buffer).parent_path();
 #else
-    return {};
+    std::vector<char> buffer(4096, '\0');
+    const auto len = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+    if (len <= 0) {
+        return {};
+    }
+
+    buffer[static_cast<size_t>(len)] = '\0';
+    return std::filesystem::path(buffer.data()).parent_path();
 #endif
 }
 
@@ -133,6 +142,11 @@ void applyEnvOverrides(nlohmann::json& config)
         taskEngine = nlohmann::json::object();
     }
 
+    auto& storage = config["storage"];
+    if (!storage.is_object()) {
+        storage = nlohmann::json::object();
+    }
+
     auto& minio = config["minio"];
     if (!minio.is_object()) {
         minio = nlohmann::json::object();
@@ -160,6 +174,10 @@ void applyEnvOverrides(nlohmann::json& config)
 	overrideInt(taskEngine, "max_retries", "TASK_ENGINE_MAX_RETRIES");
 	overrideString(taskEngine, "worker_prefix", "TASK_ENGINE_WORKER_PREFIX");
 
+    overrideString(storage, "root_dir", "STORAGE_ROOT_DIR");
+    overrideString(storage, "public_url_prefix", "STORAGE_PUBLIC_URL_PREFIX");
+    overrideString(storage, "extension", "STORAGE_EXTENSION");
+
     overrideString(minio, "endpoint", "MINIO_ENDPOINT");
     overrideString(minio, "access_key", "MINIO_ACCESS_KEY");
     overrideString(minio, "secret_key", "MINIO_SECRET_KEY");
@@ -172,8 +190,9 @@ void applyEnvOverrides(nlohmann::json& config)
 
 nlohmann::json loadConfig(const std::string& path)
 {
-    auto candidates = buildCandidatePaths(path);
-    const std::filesystem::path inputPath(path);
+    const auto effectivePath = readEnv("BACKEND_CONFIG_PATH").value_or(path);
+    auto candidates = buildCandidatePaths(effectivePath);
+    const std::filesystem::path inputPath(effectivePath);
     if (inputPath.filename() == "config.json") {
         auto fallback = inputPath;
         fallback += ".example";
@@ -196,7 +215,7 @@ nlohmann::json loadConfig(const std::string& path)
         return config;
     }
 
-    std::string message = std::format("failed to open config file: {} (tried:", path);
+    std::string message = std::format("failed to open config file: {} (tried:", effectivePath);
     for (const auto& p : tried) {
         message += std::format(" {}", p.string());
     }
@@ -211,5 +230,4 @@ const nlohmann::json& cachedConfig()
 }
 
 } // namespace backend
-
 
