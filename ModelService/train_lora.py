@@ -11,6 +11,21 @@ import torch.nn.functional as F
 import numpy as np
 
 
+DEFAULT_MODEL_PATH = os.getenv("MODEL_PATH", "./models/Z-Image-Turbo")
+
+
+def select_device() -> str:
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def select_dtype(device: str) -> torch.dtype:
+    if device == "cuda":
+        if hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported():
+            return torch.bfloat16
+        return torch.float16
+    return torch.float32
+
+
 class ImageCaptionDataset(Dataset):
     def __init__(self, image_folder, size=768):
         self.image_folder = Path(image_folder)
@@ -38,22 +53,24 @@ class ImageCaptionDataset(Dataset):
 
 
 def train_lora(
-    model_path="C:/Users/pc1/.cache/modelscope/hub/models/Tongyi-MAI/Z-Image-Turbo",
-    data_folder="./training_images",
-    output_dir="./lora_output",
-    num_epochs=100,
-    batch_size=1,
-    learning_rate=1e-4,
-    lora_rank=16,  # 5070Ti 建议从16开始
-    lora_alpha=16,
+        model_path=DEFAULT_MODEL_PATH,
+        data_folder="./training_images",
+        output_dir="./lora_output",
+        num_epochs=100,
+        batch_size=1,
+        learning_rate=1e-4,
+        lora_rank=16,  # 5070Ti 建议从16开始
+        lora_alpha=16,
 ):
     os.makedirs(output_dir, exist_ok=True)
+    device = select_device()
+    dtype = select_dtype(device)
 
     # 1. 加载模型
     print("加载 Z-Image 模型...")
     pipe = ZImagePipeline.from_pretrained(
         model_path,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=dtype,
         local_files_only=True,
     )
 
@@ -92,9 +109,9 @@ def train_lora(
 
     # 为 Transformer 添加 LoRA
     pipe.transformer = get_peft_model(pipe.transformer, lora_config)
-    pipe.transformer.to("cuda")
-    pipe.text_encoder.to("cuda")
-    pipe.vae.to("cuda")
+    pipe.transformer.to(device)
+    pipe.text_encoder.to(device)
+    pipe.vae.to(device)
 
     # 打印可训练参数
     pipe.transformer.print_trainable_parameters()
@@ -129,12 +146,10 @@ def train_lora(
                 captions = batch["caption"]
 
                 # 图像转 tensor
-                pixel_values = torch.stack(
-                    [
-                        torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 127.5 - 1.0
-                        for img in images
-                    ]
-                ).to("cuda", dtype=torch.bfloat16)
+                pixel_values = torch.stack([
+                    torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 127.5 - 1.0
+                    for img in images
+                ]).to(device, dtype=dtype)
 
                 # VAE 编码
                 with torch.no_grad():
@@ -149,7 +164,7 @@ def train_lora(
                         max_length=pipe.tokenizer.model_max_length,
                         truncation=True,
                         return_tensors="pt",
-                    ).to("cuda")
+                    ).to(device)
 
                     text_embeddings = pipe.text_encoder(text_inputs.input_ids)[0]
 

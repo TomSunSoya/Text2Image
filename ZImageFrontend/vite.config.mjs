@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url'
 import { resolve } from 'path'
 
 const dirname = fileURLToPath(new URL('.', import.meta.url))
+const backendProxyTarget = process.env.VITE_BACKEND_PROXY_TARGET || 'http://localhost:8080'
+const healthProxyTarget = process.env.VITE_HEALTH_PROXY_TARGET || backendProxyTarget
 
 export default defineConfig({
   plugins: [vue()],
@@ -27,12 +29,12 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'http://localhost:8082',
+        target: backendProxyTarget,
         changeOrigin: true,
         ws: true
       },
       '/health': {
-        target: 'http://localhost:8082',
+        target: healthProxyTarget,
         changeOrigin: true
       }
     }

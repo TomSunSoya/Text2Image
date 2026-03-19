@@ -1,0 +1,11 @@
+accelerate
+diffusers
+fastapi
+numpy
+peft
+Pillow
+safetensors
+torch
+tqdm
+transformers
+uvicorn[standard]

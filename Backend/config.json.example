@@ -6,10 +6,10 @@
     "log_level": "info"
   },
   "database": {
-    "host": "localhost",
+    "host": "mysql",
     "port": 33060,
     "ssl": false,
-    "username": "root",
+    "username": "app",
     "password": "CHANGE_ME",
     "database": "image_generator",
     "pool_size": 10,
@@ -20,7 +20,7 @@
     "expiration_hours": 24
   },
   "python_service": {
-    "url": "http://localhost:8081",
+    "url": "http://model-service:8081",
     "timeout_seconds": 900
   },
   "task_engine": {
@@ -45,7 +45,7 @@
     "presign_expiry_seconds": 3600
   },
   "storage": {
-    "root_dir": "storage/images",
+    "root_dir": "/app/storage/images",
     "public_url_prefix": "/api/images",
     "extension": "png"
   },
