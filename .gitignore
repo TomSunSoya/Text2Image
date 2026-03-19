@@ -14,6 +14,7 @@ logs/
 # Local env / secrets
 .env
 .env.*
+!.env.example
 *.local
 *.secret
 
@@ -28,6 +29,20 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ipynb_checkpoints/
+ModelService/__pycache__/
+ModelService/temp/
+ModelService/logs/
+ModelService/lora_output/
+ModelService/models/
+ModelService/outputs/
+ModelService/generated/
+ModelService/results/
+ModelService/training_images/**/*.png
+ModelService/training_images/**/*.jpg
+ModelService/training_images/**/*.jpeg
+ModelService/training_images/**/*.gif
+ModelService/training_images/**/*.webp
+ModelService/training_images/**/*.bmp
 PythonProject/temp/
 PythonProject/lora_output/
 PythonProject/training_images/
@@ -64,4 +79,5 @@ ModelService/models/
 
 # Backend sensitive config
 Backend/config.json
-
+Backend/storage/
+Backend/.vs/
