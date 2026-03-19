@@ -40,6 +40,7 @@ PythonProject/**/*.jpeg
 PythonProject/**/*.gif
 PythonProject/**/*.webp
 PythonProject/**/*.bmp
+ModelService/models/
 
 # Java / Maven
 **/target/
