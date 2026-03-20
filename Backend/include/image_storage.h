@@ -19,4 +19,6 @@ public:
 	std::optional<std::string> loadBase64(const std::string& storageKey, std::string& error) const;
 
 	std::string contentTypeForKey(const std::string& storageKey) const;
+
+	bool removeFile(const std::string& storageKey) const;
 };
