@@ -98,6 +98,21 @@ void fillDirectError(const drogon::HttpResponsePtr& resp,
 std::optional<int64_t> resolveUserId(const drogon::HttpRequestPtr& req,
                                      const drogon::HttpResponsePtr& resp)
 {
+    // Fast path: JwtMiddleware already verified the token and stored userId
+    // in request attributes — no need to re-parse the JWT.
+    const auto& attrs = req->attributes();
+    if (attrs) {
+        try {
+            auto userId = attrs->get<int64_t>("userId");
+            if (userId > 0) {
+                return userId;
+            }
+        } catch (...) {
+            // Attribute not set (route has no JwtMiddleware filter); fall through.
+        }
+    }
+
+    // Fallback: parse token ourselves (for unfiltered routes).
     const auto token = utils::extractBearerToken(req);
     if (!token) {
         fillDirectError(resp, drogon::k401Unauthorized, "missing_bearer_token", "missing bearer token");

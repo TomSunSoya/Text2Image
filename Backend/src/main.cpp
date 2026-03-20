@@ -43,9 +43,14 @@ int main()
         const auto port = serverConfig.value("port", 8080);
         const auto threads = serverConfig.value("threads", 1);
 
+        // Limit request body to 1MB to prevent memory exhaustion from
+        // oversized payloads (the create endpoint only needs prompt text).
+        constexpr size_t kMaxBodySize = 1 * 1024 * 1024;
+
         drogon::app()
             .addListener(host, static_cast<uint16_t>(port))
-            .setThreadNum(threads);
+            .setThreadNum(threads)
+            .setClientMaxBodySize(kMaxBodySize);
 
         spdlog::info("Backend listening on {}:{}", host, port);
         drogon::app().run();

@@ -12,14 +12,17 @@ namespace {
 
 using traits = jwt::traits::nlohmann_json;
 
-std::string loadSecret()
+const std::string& loadSecret()
 {
-    try {
-        const auto config = backend::loadConfig();
-        return config.at("jwt").at("secret").get<std::string>();
-    } catch (...) {
-        return "development-secret-change-me";
-    }
+    static const std::string secret = [] {
+        try {
+            const auto& config = backend::cachedConfig();
+            return config.at("jwt").at("secret").get<std::string>();
+        } catch (...) {
+            return std::string("development-secret-change-me");
+        }
+    }();
+    return secret;
 }
 
 std::string loadIssuer()

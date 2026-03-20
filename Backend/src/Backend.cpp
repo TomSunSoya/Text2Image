@@ -30,6 +30,14 @@ std::filesystem::path executableDir()
 #endif
 }
 
+void appendCandidatePath(std::vector<std::filesystem::path>& candidates,
+                         const std::filesystem::path& baseDir,
+                         const std::filesystem::path& input)
+{
+    candidates.push_back(baseDir / input);
+    candidates.push_back(baseDir / "etc" / input);
+}
+
 std::vector<std::filesystem::path> buildCandidatePaths(const std::string& path)
 {
     std::vector<std::filesystem::path> candidates;
@@ -38,16 +46,16 @@ std::vector<std::filesystem::path> buildCandidatePaths(const std::string& path)
     candidates.push_back(input);
 
     if (input.is_relative()) {
-        candidates.push_back(std::filesystem::current_path() / input);
+        appendCandidatePath(candidates, std::filesystem::current_path(), input);
 
         const auto exeDir = executableDir();
         if (!exeDir.empty()) {
-            candidates.push_back(exeDir / input);
+            appendCandidatePath(candidates, exeDir, input);
 
             auto walk = exeDir;
             for (int i = 0; i < 8 && walk.has_parent_path(); ++i) {
                 walk = walk.parent_path();
-                candidates.push_back(walk / input);
+                appendCandidatePath(candidates, walk, input);
             }
         }
     }
@@ -152,8 +160,17 @@ void applyEnvOverrides(nlohmann::json& config)
 
 nlohmann::json loadConfig(const std::string& path)
 {
+    auto candidates = buildCandidatePaths(path);
+    const std::filesystem::path input(path);
+    if (input.filename() == "config.json") {
+        auto fallback = input;
+        fallback += ".example";
+        const auto fallbackCandidates = buildCandidatePaths(fallback.string());
+        candidates.insert(candidates.end(), fallbackCandidates.begin(), fallbackCandidates.end());
+    }
+
     std::vector<std::filesystem::path> tried;
-    for (const auto& candidate : buildCandidatePaths(path)) {
+    for (const auto& candidate : candidates) {
         tried.push_back(candidate);
 
         std::ifstream input(candidate);
@@ -173,6 +190,12 @@ nlohmann::json loadConfig(const std::string& path)
     }
     message += ")";
     throw std::runtime_error(message);
+}
+
+const nlohmann::json& cachedConfig()
+{
+    static const nlohmann::json config = loadConfig();
+    return config;
 }
 
 } // namespace backend

@@ -107,8 +107,11 @@ npm run dev
 ## 7. Configuration
 
 ### 7.1 Backend
-Primary file:
-- `Backend/config.json`
+Copy the example config and fill in your local values:
+```powershell
+cp Backend/config.json.example Backend/config.json
+# edit Backend/config.json with your database password, JWT secret, etc.
+```
 
 Important settings:
 - `server`: host, port, thread count
@@ -149,5 +152,5 @@ What is not yet finished:
 
 ## 9. Security Notes
 - do not commit real secrets or production passwords
-- treat `Backend/config.json` as local-development configuration only
+- `Backend/config.json` is gitignored — use `Backend/config.json.example` as the template
 - move credentials and secrets to environment variables before any shared or deployed usage

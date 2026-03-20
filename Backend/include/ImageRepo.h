@@ -28,10 +28,13 @@ public:
 
 	std::optional<models::ImageGeneration> findByRequestIdAndUserId(const std::string& requestId, int64_t userId);
 	std::optional<models::ImageGeneration> claimNextTask(const std::string& workerId, long leaseSeconds);
+	bool renewLease(int64_t id, int64_t userId, const std::string& workerId, long leaseSeconds);
 
 	bool finishClaimedTask(const models::ImageGeneration& generation);
 	bool cancelByIdAndUserId(int64_t id, int64_t userId, models::ImageGeneration *updated = nullptr);
 	bool retryByIdAndUserId(int64_t id, int64_t userId, models::ImageGeneration* updated = nullptr);
+
+	int expireLeases();
 
     bool updateStatusAndError(int64_t id,
                               int64_t userId,
