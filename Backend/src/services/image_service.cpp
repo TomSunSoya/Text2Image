@@ -3,16 +3,19 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <condition_variable>
 #include <format>
 #include <limits>
 #include <mutex>
-#include <openssl/evp.h>
 #include <random>
 #include <spdlog/spdlog.h>
+#include <stop_token>
 #include <string>
+#include <thread>
 
 #include "Backend.h"
 #include "ImageRepo.h"
+#include "base64_utils.h"
 #include "client.h"
 #include "image_storage.h"
 #include "task_event_hub.h"
@@ -35,7 +38,7 @@ TaskEngineConfig loadTaskEngineConfig()
     TaskEngineConfig config;
 
     try {
-        const auto backendConfig = backend::loadConfig();
+        const auto& backendConfig = backend::cachedConfig();
         if (backendConfig.contains("task_engine") && backendConfig.at("task_engine").is_object()) {
             const auto& taskEngineConfig = backendConfig.at("task_engine");
             config.workers = (std::max)(0, taskEngineConfig.value("workers", config.workers));
@@ -68,6 +71,93 @@ std::once_flag &workerStartOnce() {
     return onceFlag;
 }
 
+// Condition variable for notifying workers when new tasks are enqueued.
+// Workers wait on this instead of blindly polling the DB every 500ms.
+std::mutex& taskNotifyMutex() {
+    static std::mutex mtx;
+    return mtx;
+}
+
+std::condition_variable_any& taskNotifyCv() {
+    static std::condition_variable_any cv;
+    return cv;
+}
+
+void notifyWorkers() {
+    taskNotifyCv().notify_one();
+}
+
+std::chrono::seconds leaseRenewInterval(long leaseSeconds)
+{
+    return std::chrono::seconds((std::max)(1l, leaseSeconds / 2));
+}
+
+std::jthread startLeaseKeeper(const models::ImageGeneration& task,
+                              const std::string& workerId,
+                              long leaseSeconds)
+{
+    const auto renewEvery = leaseRenewInterval(leaseSeconds);
+
+    return std::jthread([taskId = task.id,
+                         userId = task.user_id,
+                         workerId,
+                         leaseSeconds,
+                         renewEvery](std::stop_token stopToken) {
+        ImageRepo repo;
+        auto nextRenewal = std::chrono::steady_clock::now() + renewEvery;
+
+        while (!stopToken.stop_requested()) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            if (stopToken.stop_requested()) {
+                break;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (now < nextRenewal) {
+                continue;
+            }
+
+            try {
+                if (!repo.renewLease(taskId, userId, workerId, leaseSeconds)) {
+                    spdlog::warn("lease keeper lost task claim id={}, user_id={}, worker_id={}",
+                                 taskId, userId, workerId);
+                    break;
+                }
+            } catch (const std::exception& ex) {
+                spdlog::warn("lease keeper failed to renew lease id={}, user_id={}, worker_id={}, reason={}",
+                             taskId, userId, workerId, ex.what());
+            } catch (...) {
+                spdlog::warn("lease keeper failed to renew lease id={}, user_id={}, worker_id={}, reason=unknown",
+                             taskId, userId, workerId);
+            }
+
+            nextRenewal = now + renewEvery;
+        }
+    });
+}
+
+void cleanupOrphanedStoredImage(const models::ImageGeneration& generation)
+{
+    if (generation.storage_key.empty()) {
+        return;
+    }
+
+    try {
+        ImageStorage storage;
+        const bool removed = storage.removeFile(generation.storage_key);
+        if (!removed) {
+            spdlog::warn("failed to remove orphaned storage file for task id={}, key={}",
+                         generation.id, generation.storage_key);
+        }
+    } catch (const std::exception& ex) {
+        spdlog::warn("failed to remove orphaned storage file for task id={}, key={}, reason={}",
+                     generation.id, generation.storage_key, ex.what());
+    } catch (...) {
+        spdlog::warn("failed to remove orphaned storage file for task id={}, key={}, reason=unknown",
+                     generation.id, generation.storage_key);
+    }
+}
+
 std::string buildRequestId()
 {
     static thread_local std::mt19937_64 rng(std::random_device{}());
@@ -75,30 +165,6 @@ std::string buildRequestId()
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
     const auto rand = std::uniform_int_distribution<uint64_t>{}(rng);
     return std::format("img-{}-{:x}", millis, rand);
-}
-
-std::string encodeToBase64(const std::string& bytes)
-{
-    if (bytes.empty()) {
-        return {};
-    }
-
-    if (bytes.size() > static_cast<size_t>((std::numeric_limits<int>::max)())) {
-        return {};
-    }
-
-    std::string base64((bytes.size() + 2) / 3 * 4, '\0');
-    const int outLen = EVP_EncodeBlock(
-        reinterpret_cast<unsigned char*>(&base64[0]),
-        reinterpret_cast<const unsigned char*>(bytes.data()),
-        static_cast<int>(bytes.size()));
-
-    if (outLen <= 0) {
-        return {};
-    }
-
-    base64.resize(static_cast<size_t>(outLen));
-    return base64;
 }
 
 std::string downloadImageAsBase64(const std::string& url, long timeoutSeconds)
@@ -109,7 +175,7 @@ std::string downloadImageAsBase64(const std::string& url, long timeoutSeconds)
         return {};
     }
 
-    return encodeToBase64(response.body);
+    return utils::encodeToBase64(response.body);
 }
 
 std::string toLower(std::string value)
@@ -206,7 +272,7 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation)
     std::string serviceUrl;
 
     try {
-        const auto config = backend::loadConfig();
+        const auto& config = backend::cachedConfig();
         const auto& serviceConfig = config.at("python_service");
 
         serviceUrl = serviceConfig.at("url").get<std::string>();
@@ -327,36 +393,6 @@ void persistGeneratedImage(models::ImageGeneration& generation)
     }
 }
 
-void processQueuedGeneration(const models::ImageGeneration& task)
-{
-    ImageRepo repo;
-
-    if (!repo.updateStatusAndError(task.id, task.user_id, "generating", "")) {
-        spdlog::warn("ImageService async failed to mark generating, id={}, user_id={}", task.id, task.user_id);
-    }
-
-    auto result = runRemoteGeneration(task);
-    if (!result.completed_at.has_value() && (result.status == "success" || result.status == "failed")) {
-        result.completed_at = std::chrono::system_clock::now();
-    }
-
-    persistGeneratedImage(result);
-
-    if (!repo.updateGenerationResult(result.id,
-                                     result.user_id,
-                                     result.status,
-                                     result.image_url,
-                                     result.image_base64,
-                                     result.error_message,
-                                     result.generation_time,
-                                     result.failure_code,
-                                     result.thumbnail_url,
-                                     result.storage_key,
-                                     result.completed_at)) {
-        spdlog::warn("ImageService async failed to persist result, id={}, user_id={}", result.id, result.user_id);
-    }
-}
-
 void workerLoop(std::stop_token stopToken, const std::string& workerId, const TaskEngineConfig& config)
 {
     ImageRepo repo;
@@ -365,7 +401,13 @@ void workerLoop(std::stop_token stopToken, const std::string& workerId, const Ta
         try {
 			auto task = repo.claimNextTask(workerId, config.lease_seconds);
             if (!task) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(config.poll_interval_ms));
+                // Wait on condition variable instead of blind sleep.
+                // Wakes up when create()/retryById() notify, or after
+                // poll_interval_ms as fallback. stop_token is checked
+                // by the outer while loop on next iteration.
+                std::unique_lock lock(taskNotifyMutex());
+                taskNotifyCv().wait_for(lock,
+                    std::chrono::milliseconds(config.poll_interval_ms));
 				continue;
             }
 
@@ -373,13 +415,19 @@ void workerLoop(std::stop_token stopToken, const std::string& workerId, const Ta
 			             task->id, task->user_id, task->request_id, workerId);
             TaskEventHub::instance().publishTaskUpdated(*task);
 
+            auto leaseKeeper = startLeaseKeeper(*task, workerId, config.lease_seconds);
 			auto result = runRemoteGeneration(*task);
 			persistGeneratedImage(result);
-            if (!repo.finishClaimedTask(result))
+            const bool finished = repo.finishClaimedTask(result);
+            leaseKeeper.request_stop();
+
+            if (!finished) {
+                cleanupOrphanedStoredImage(result);
 				spdlog::warn("task worker failed to finish claimed task id={}, user_id={}, worker_id={}",
 				             task->id, task->user_id, workerId);
-            else
+            } else {
                 TaskEventHub::instance().publishTaskUpdated(result);
+            }
 		}
 		catch (const std::exception& ex) {
             spdlog::error("task worker exception: {}, worker_id={}", ex.what(), workerId);
@@ -387,6 +435,26 @@ void workerLoop(std::stop_token stopToken, const std::string& workerId, const Ta
         } catch (...) {
             spdlog::error("task worker unknown exception, worker_id={}", workerId);
             std::this_thread::sleep_for(std::chrono::milliseconds(config.poll_interval_ms));
+        }
+    }
+}
+
+void leaseExpiryLoop(std::stop_token stopToken, int intervalSeconds)
+{
+    ImageRepo repo;
+
+    while (!stopToken.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::seconds(intervalSeconds));
+        if (stopToken.stop_requested()) break;
+
+        try {
+            int expired = repo.expireLeases();
+            if (expired > 0) {
+                spdlog::info("lease expiry scanner recovered {} task(s)", expired);
+                notifyWorkers();
+            }
+        } catch (const std::exception& ex) {
+            spdlog::error("lease expiry scanner error: {}", ex.what());
         }
     }
 }
@@ -400,14 +468,19 @@ void ensureWorkersStarted() {
         }
 
 		auto& workers = taskWorkers();
-		workers.reserve(cfg.workers);
+		// +1 for the lease expiry scanner thread
+		workers.reserve(cfg.workers + 1);
 
         for (int i = 0; i < cfg.workers; ++i) {
 			const auto workerId = std::format("{}-{}", cfg.worker_prefix, i + 1);
             workers.emplace_back(workerLoop, workerId, cfg);
         }
 
-		spdlog::info("ImageService task engine started with {} worker(s)", cfg.workers);
+		// Lease expiry scanner: runs every 30 seconds to recover stuck tasks
+		constexpr int kLeaseExpiryIntervalSeconds = 30;
+		workers.emplace_back(leaseExpiryLoop, kLeaseExpiryIntervalSeconds);
+
+		spdlog::info("ImageService task engine started with {} worker(s) + lease scanner", cfg.workers);
 	});
 }
 
@@ -451,6 +524,7 @@ std::expected<ImageCreateResult, ServiceError> ImageService::create(int64_t user
         generation.id = repo.insert(generation);
         TaskEventHub::instance().publishTaskUpdated(generation);
 		ensureWorkersStarted();
+		notifyWorkers();
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::create persist error: {}", ex.what());
         return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_history_persist_failed", "failed to persist image history"});
@@ -593,6 +667,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::retryById(int64_t user
 
         TaskEventHub::instance().publishTaskUpdated(updated);
 		ensureWorkersStarted();
+		notifyWorkers();
 		return ImageGetResult{updated};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::retryById error: {}", ex.what());
@@ -644,8 +719,33 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
 
     try {
         ImageRepo repo;
-        if (!repo.deleteByIdAndUserId(id, userId)) {
+
+        // Must check terminal state before deleting — can't delete in-progress tasks.
+        auto current = repo.findByIdAndUserId(id, userId);
+        if (!current) {
             return std::unexpected(ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
+        }
+
+        if (!task_state::canDelete(current->status)) {
+            ServiceError err{drogon::k400BadRequest, "task_delete_not_allowed",
+                             "only completed tasks can be deleted"};
+            err.details["status"] = current->status;
+            return std::unexpected(std::move(err));
+        }
+
+        if (!repo.deleteByIdAndUserId(id, userId)) {
+            return std::unexpected(ServiceError{drogon::k409Conflict, "task_delete_conflict", "task cannot be deleted in its current state"});
+        }
+
+        // Clean up the disk file to prevent storage leaks.
+        if (!current->storage_key.empty()) {
+            try {
+                ImageStorage storage;
+                storage.removeFile(current->storage_key);
+            } catch (const std::exception& ex) {
+                spdlog::warn("ImageService::deleteById failed to remove storage file, id={}, key={}, reason={}",
+                             id, current->storage_key, ex.what());
+            }
         }
 
         return {};
@@ -660,7 +760,7 @@ ImageHealthResult ImageService::checkHealth() const
     ImageHealthResult result;
 
     try {
-        const auto config = backend::loadConfig();
+        const auto& config = backend::cachedConfig();
         const auto& serviceConfig = config.at("python_service");
 
         const auto serviceUrl = serviceConfig.at("url").get<std::string>();

@@ -59,7 +59,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
-install(FILES config.json DESTINATION etc)
+install(FILES config.json.example DESTINATION etc)
 
 # ---------- tests ----------
 option(BUILD_TESTS "Build test targets" ON)

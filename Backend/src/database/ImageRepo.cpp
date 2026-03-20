@@ -474,7 +474,8 @@ bool ImageRepo::deleteByIdAndUserId(int64_t id, int64_t userId)
     ensureTable();
 
     auto result = database::DBManager::threadSession()
-        .sql("DELETE FROM " + imageTableName() + " WHERE id = ? AND user_id = ?")
+        .sql("DELETE FROM " + imageTableName() +
+             " WHERE id = ? AND user_id = ? AND status IN ('success', 'failed', 'cancelled', 'timeout')")
         .bind(id, userId)
         .execute();
 
@@ -508,15 +509,36 @@ std::optional<models::ImageGeneration> ImageRepo::claimNextTask(const std::strin
     const auto nowText = timeToDbString(now);
     const auto expiresAtText = timeToDbString(expiresAt);
 
+    // Atomic UPDATE with subquery: only one worker can claim a given row.
+    // The subquery selects the oldest eligible task; the outer UPDATE claims it
+    // in a single statement, eliminating the race window between SELECT and UPDATE.
+    auto update = database::DBManager::threadSession().sql(
+        "UPDATE " + imageTableName() +
+        " SET status = 'generating', worker_id = ?, started_at = IFNULL(started_at, ?), "
+        "     lease_expires_at = ?, failure_code = '', error_message = ''"
+        " WHERE id = ("
+        "   SELECT id FROM (SELECT id FROM " + imageTableName() +
+        "     WHERE status IN ('queued', 'pending')"
+        "        OR (status = 'generating' AND (lease_expires_at IS NULL OR lease_expires_at < ?))"
+        "     ORDER BY created_at ASC, id ASC LIMIT 1"
+        "   ) AS t"
+        " )")
+        .bind(workerId, nowText, expiresAtText, nowText)
+        .execute();
 
+    if (update.getAffectedItemsCount() == 0) {
+        return std::nullopt;
+    }
 
+    // Read back the exact row we just claimed.
+    // Use lease_expires_at as discriminator: it is set to a precise timestamp
+    // per claim, so worker_id + lease_expires_at is unique even when the same
+    // worker_id has stale tasks from a previous process run.
     auto select = database::DBManager::threadSession().sql(
         std::string("SELECT ") + kColumns +
         " FROM " + imageTableName() +
-        " WHERE status IN ('queued', 'pending') "
-        "    OR (status = 'generating' AND (lease_expires_at IS NULL OR lease_expires_at < ?)) "
-        " ORDER BY created_at ASC, id ASC LIMIT 1")
-        .bind(nowText)
+        " WHERE worker_id = ? AND status = 'generating' AND lease_expires_at = ?")
+        .bind(workerId, expiresAtText)
         .execute();
 
     auto row = select.fetchOne();
@@ -524,28 +546,25 @@ std::optional<models::ImageGeneration> ImageRepo::claimNextTask(const std::strin
         return std::nullopt;
     }
 
-    auto task = rowToImageGeneration(row);
-    auto update = database::DBManager::threadSession().sql(
+    return rowToImageGeneration(row);
+}
+
+bool ImageRepo::renewLease(int64_t id, int64_t userId, const std::string& workerId, long leaseSeconds)
+{
+    ensureTable();
+
+    const auto now = std::chrono::system_clock::now();
+    const auto expiresAt = now + std::chrono::seconds(leaseSeconds <= 0 ? 300 : leaseSeconds);
+    const auto expiresAtText = timeToDbString(expiresAt);
+
+    auto result = database::DBManager::threadSession().sql(
         "UPDATE " + imageTableName() +
-        " SET status = 'generating', worker_id = ?, started_at = IFNULL(started_at, ?), lease_expires_at = ?, failure_code = '', error_message = ''"
-        " WHERE id = ? AND (status IN ('queued', 'pending') OR (status = 'generating' AND (lease_expires_at IS NULL OR lease_expires_at < ?)))")
-        .bind(workerId, nowText, expiresAtText, task.id, nowText)
+        " SET lease_expires_at = ?"
+        " WHERE id = ? AND user_id = ? AND status = 'generating' AND worker_id = ?")
+        .bind(expiresAtText, id, userId, workerId)
         .execute();
 
-    if (update.getAffectedItemsCount() == 0) {
-        return std::nullopt;
-    }
-
-    task.status = "generating";
-    task.worker_id = workerId;
-    if (!task.started_at.has_value()) {
-        task.started_at = now;
-    }
-
-    task.lease_expires_at = expiresAt;
-    task.failure_code.clear();
-    task.error_message.clear();
-    return task;
+    return result.getAffectedItemsCount() > 0;
 }
 
 bool ImageRepo::finishClaimedTask(const models::ImageGeneration& generation)
@@ -639,6 +658,38 @@ bool ImageRepo::retryByIdAndUserId(int64_t id, int64_t userId, models::ImageGene
     }
 
     return true;
+}
+
+int ImageRepo::expireLeases()
+{
+    ensureTable();
+
+    const auto nowText = timeToDbString(std::chrono::system_clock::now());
+
+    // Tasks that can still retry: reset to 'queued'
+    auto requeueResult = database::DBManager::threadSession().sql(
+        "UPDATE " + imageTableName() +
+        " SET status = 'queued', worker_id = NULL, lease_expires_at = NULL,"
+        "     retry_count = retry_count + 1, failure_code = 'lease_expired',"
+        "     error_message = 'worker lease expired, re-queued for retry'"
+        " WHERE status = 'generating' AND lease_expires_at IS NOT NULL"
+        "   AND lease_expires_at < ? AND retry_count < max_retries")
+        .bind(nowText)
+        .execute();
+
+    // Tasks that exhausted retries: mark as 'timeout'
+    auto timeoutResult = database::DBManager::threadSession().sql(
+        "UPDATE " + imageTableName() +
+        " SET status = 'timeout', worker_id = NULL, lease_expires_at = NULL,"
+        "     completed_at = ?, failure_code = 'lease_expired_max_retries',"
+        "     error_message = 'worker lease expired and max retries reached'"
+        " WHERE status = 'generating' AND lease_expires_at IS NOT NULL"
+        "   AND lease_expires_at < ? AND retry_count >= max_retries")
+        .bind(nowText, nowText)
+        .execute();
+
+    return static_cast<int>(requeueResult.getAffectedItemsCount()
+                          + timeoutResult.getAffectedItemsCount());
 }
 
 bool ImageRepo::updateStatusAndError(int64_t id,

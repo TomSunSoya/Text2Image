@@ -7,9 +7,10 @@
 #include <stdexcept>
 #include <string>
 
-#include <openssl/evp.h>
+#include <spdlog/spdlog.h>
 
 #include "Backend.h"
+#include "base64_utils.h"
 
 namespace {
 	namespace fs = std::filesystem;
@@ -20,21 +21,22 @@ namespace {
 		std::string extension{ "png" };
 	};
 
-	StorageConfig loadStorageConfg() {
-		StorageConfig cfg;
-
-		try {
-			const auto config = backend::loadConfig();
-			if (config.contains("storage") && config.at("storage").is_object()) {
-				const auto& storageConfig = config.at("storage");
-				cfg.root_dir = storageConfig.value("root_dir", cfg.root_dir.string());
-				cfg.public_url_prefix = storageConfig.value("public_url_prefix", cfg.public_url_prefix);
-				cfg.extension = storageConfig.value("extension", cfg.extension);
+	const StorageConfig& loadStorageConfig() {
+		static const StorageConfig cfg = [] {
+			StorageConfig c;
+			try {
+				const auto& config = backend::cachedConfig();
+				if (config.contains("storage") && config.at("storage").is_object()) {
+					const auto& storageConfig = config.at("storage");
+					c.root_dir = storageConfig.value("root_dir", c.root_dir.string());
+					c.public_url_prefix = storageConfig.value("public_url_prefix", c.public_url_prefix);
+					c.extension = storageConfig.value("extension", c.extension);
+				}
 			}
-		}
-		catch (...) {
-
-		}
+			catch (...) {
+			}
+			return c;
+		}();
 		return cfg;
 	}
 
@@ -52,52 +54,6 @@ namespace {
 		return value;
 	}
 
-	std::string encodeToBase64(const std::string& bytes) {
-		if (bytes.empty()) {
-			return {};
-		}
-
-		std::string out((bytes.size() + 2) / 3 * 4, '\0');
-		const int len = EVP_EncodeBlock(
-			reinterpret_cast<unsigned char*>(&out[0]),
-			reinterpret_cast<const unsigned char*>(bytes.data()),
-			static_cast<int>(bytes.size()));
-
-		if (len <= 0)
-			return {};
-
-		out.resize(static_cast<size_t>(len));
-		return out;
-	}
-
-	std::string decodeBase64(std::string base64) {
-		base64.erase(
-			std::remove_if(base64.begin(), base64.end(), [](unsigned char c) {
-				return std::isspace(c);
-				}),
-			base64.end()
-		);
-		
-		std::string out(base64.size() / 4 * 3, '\0');
-
-		const int decoded = EVP_DecodeBlock(
-			reinterpret_cast<unsigned char*>(&out[0]),
-			reinterpret_cast<const unsigned char*>(base64.data()),
-			static_cast<int>(base64.size()));
-
-		if (decoded < 0)
-			throw std::runtime_error("invalid base64 payload");
-
-		int padding = 0;
-		if (!base64.empty() && base64.back() == '=')
-			++padding;
-		if (base64.size() > 1 && base64[base64.size() - 2] == '=')
-			++padding;
-
-		out.resize(static_cast<size_t>(decoded - padding));
-		return out;
-	}
-
 	fs::path filePathForKey(const fs::path& rootDir, const std::string& storageKey) {
 		return rootDir / storageKey;
 	}
@@ -112,7 +68,7 @@ StoredImage ImageStorage::storeBase64(int64_t taskId, const std::string requestI
 	if (imageBase64.empty())
 		throw std::runtime_error("imageBase64 is empty");
 
-	const auto cfg = loadStorageConfg();
+	const auto& cfg = loadStorageConfig();
 	const auto safeRequestId = sanitizeKeyPart(requestId);
 	const auto extension = sanitizeKeyPart(cfg.extension);
 	const auto storageKey = "task-" + std::to_string(taskId) + "-" + safeRequestId + "." + extension;
@@ -120,7 +76,7 @@ StoredImage ImageStorage::storeBase64(int64_t taskId, const std::string requestI
 
 	fs::create_directories(path.parent_path());
 
-	const auto bytes = decodeBase64(imageBase64);
+	const auto bytes = utils::decodeBase64(imageBase64);
 
 	std::ofstream output(path, std::ios::binary);
 	if (!output)
@@ -146,7 +102,7 @@ std::optional<std::string> ImageStorage::loadBytes(const std::string& storageKey
 		return std::nullopt;
 	}
 
-	const auto cfg = loadStorageConfg();
+	const auto& cfg = loadStorageConfig();
 	const auto path = filePathForKey(cfg.root_dir, storageKey);
 
 	std::ifstream input(path, std::ios::binary);
@@ -165,7 +121,7 @@ std::optional<std::string> ImageStorage::loadBase64(const std::string& storageKe
 	if (!bytes)
 		return std::nullopt;
 
-	return encodeToBase64(*bytes);
+	return utils::encodeToBase64(*bytes);
 }
 
 std::string ImageStorage::contentTypeForKey(const std::string& storageKey) const
@@ -175,4 +131,21 @@ std::string ImageStorage::contentTypeForKey(const std::string& storageKey) const
 	if (storageKey.ends_with(".webp"))
 		return "image/webp";
 	return "image/png";
+}
+
+bool ImageStorage::removeFile(const std::string& storageKey) const
+{
+	if (storageKey.empty()) {
+		return false;
+	}
+
+	const auto& cfg = loadStorageConfig();
+	const auto path = filePathForKey(cfg.root_dir, storageKey);
+
+	std::error_code ec;
+	if (!fs::exists(path, ec)) {
+		return false;
+	}
+
+	return fs::remove(path, ec);
 }
