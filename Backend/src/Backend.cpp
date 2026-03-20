@@ -161,9 +161,9 @@ void applyEnvOverrides(nlohmann::json& config)
 nlohmann::json loadConfig(const std::string& path)
 {
     auto candidates = buildCandidatePaths(path);
-    const std::filesystem::path input(path);
-    if (input.filename() == "config.json") {
-        auto fallback = input;
+    const std::filesystem::path inputPath(path);
+    if (inputPath.filename() == "config.json") {
+        auto fallback = inputPath;
         fallback += ".example";
         const auto fallbackCandidates = buildCandidatePaths(fallback.string());
         candidates.insert(candidates.end(), fallbackCandidates.begin(), fallbackCandidates.end());
@@ -173,13 +173,13 @@ nlohmann::json loadConfig(const std::string& path)
     for (const auto& candidate : candidates) {
         tried.push_back(candidate);
 
-        std::ifstream input(candidate);
-        if (!input.is_open()) {
+        std::ifstream configFile(candidate);
+        if (!configFile.is_open()) {
             continue;
         }
 
         nlohmann::json config;
-        input >> config;
+        configFile >> config;
         applyEnvOverrides(config);
         return config;
     }
