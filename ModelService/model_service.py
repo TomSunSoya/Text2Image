@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -64,6 +65,16 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+PROMPT_MIN_LENGTH = 3
+PROMPT_MAX_LENGTH = 1000
+NEGATIVE_PROMPT_MAX_LENGTH = 500
+MIN_IMAGE_SIZE = 512
+MAX_IMAGE_SIZE = 2048
+IMAGE_SIZE_STEP = 64
+MIN_NUM_STEPS = 1
+MAX_NUM_STEPS = 50
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
 
 def resolve_temp_file(filename: str) -> Path:
     candidate = (TEMP_PATH / filename).resolve()
@@ -89,6 +100,57 @@ class GenerateResponse(BaseModel):
     message: str
     timestamp: str
     generation_time: Optional[float] = None
+
+
+def validate_generate_request(request: GenerateRequest) -> GenerateRequest:
+    request.prompt = (request.prompt or "").strip()
+    request.negative_prompt = (request.negative_prompt or "").strip()
+
+    if len(request.prompt) < PROMPT_MIN_LENGTH or len(request.prompt) > PROMPT_MAX_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"prompt length must be between {PROMPT_MIN_LENGTH} and {PROMPT_MAX_LENGTH} characters",
+        )
+
+    if len(request.negative_prompt) > NEGATIVE_PROMPT_MAX_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"negative_prompt must be at most {NEGATIVE_PROMPT_MAX_LENGTH} characters",
+        )
+
+    if request.num_steps < MIN_NUM_STEPS or request.num_steps > MAX_NUM_STEPS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"num_steps must be between {MIN_NUM_STEPS} and {MAX_NUM_STEPS}",
+        )
+
+    for field_name in ("width", "height"):
+        value = getattr(request, field_name)
+        if value < MIN_IMAGE_SIZE or value > MAX_IMAGE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be between {MIN_IMAGE_SIZE} and {MAX_IMAGE_SIZE}",
+            )
+        if value % IMAGE_SIZE_STEP != 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be a multiple of {IMAGE_SIZE_STEP}",
+            )
+
+    if request.seed is not None and request.seed < 0:
+        raise HTTPException(status_code=400, detail="seed must be greater than or equal to 0")
+
+    if request.request_id is not None:
+        request.request_id = request.request_id.strip()
+        if not request.request_id:
+            request.request_id = None
+        elif not REQUEST_ID_PATTERN.fullmatch(request.request_id):
+            raise HTTPException(
+                status_code=400,
+                detail="request_id may only contain letters, numbers, dot, underscore, and hyphen",
+            )
+
+    return request
 
 
 class ZImageModelService:
@@ -310,7 +372,8 @@ async def health_check():
 @app.post("/generate", response_model=GenerateResponse)
 async def generate_image(request: GenerateRequest):
     try:
-        result = await asyncio.to_thread(model_service.generate_image, request)
+        validated_request = validate_generate_request(request)
+        result = await asyncio.to_thread(model_service.generate_image, validated_request)
         return GenerateResponse(**result)
     except HTTPException:
         raise

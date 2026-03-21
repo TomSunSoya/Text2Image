@@ -145,7 +145,7 @@
                 type="danger"
                 size="small"
                 :loading="row.__actionType === 'delete'"
-                :disabled="Boolean(row.__actionType)"
+                :disabled="Boolean(row.__actionType) || !canDeleteTask(row)"
                 @click.stop="handleDelete(row)"
               >
                 Delete
@@ -179,7 +179,8 @@ import {
   canDownloadImageTask,
   canRetryImageTask,
   getImageStatusTagType,
-  isImageActiveStatus
+  isImageActiveStatus,
+  isImageTerminalStatus
 } from '@/utils/imageTask'
 
 const tableRef = ref(null)
@@ -193,6 +194,7 @@ const selectedStatus = ref('all')
 const statusOptions = [
   { label: 'All Statuses', value: 'all' },
   { label: 'Queued', value: 'queued' },
+  { label: 'Pending', value: 'pending' },
   { label: 'Generating', value: 'generating' },
   { label: 'Success', value: 'success' },
   { label: 'Failed', value: 'failed' },
@@ -472,7 +474,7 @@ const handleRetry = async (row) => {
 }
 
 const handleDelete = async (row) => {
-  if (!row?.id || row.__actionType) {
+  if (!row?.id || row.__actionType || !canDeleteTask(row)) {
     return
   }
 
@@ -508,6 +510,8 @@ const canCancelTask = (row) => canCancelImageTask(row?.status)
 const canRetryTask = (row) => canRetryImageTask(row)
 
 const canDownloadTask = (row) => canDownloadImageTask(row?.status)
+
+const canDeleteTask = (row) => isImageTerminalStatus(row?.status)
 
 const getStatusType = (status) => getImageStatusTagType(status)
 
