@@ -78,8 +78,8 @@ std::mutex& taskNotifyMutex() {
     return mtx;
 }
 
-std::condition_variable_any& taskNotifyCv() {
-    static std::condition_variable_any cv;
+std::condition_variable& taskNotifyCv() {
+    static std::condition_variable cv;
     return cv;
 }
 
