@@ -203,6 +203,7 @@ import {
 } from '@/utils/imageTask'
 
 const POLL_TIMEOUT_MS = 8 * 60 * 1000
+const TASK_POLL_INTERVAL_MS = 2500
 
 const imageStore = useImageStore()
 const formRef = ref(null)
@@ -218,6 +219,7 @@ let activeBinaryToken = 0
 let activeTaskToken = 0
 let socketUnsubscribe = null
 let progressTimer = 0
+let taskPollTimer = 0
 let taskTimeoutId = 0
 let taskResolve = null
 let taskReject = null
@@ -305,9 +307,17 @@ const clearTaskTimeout = () => {
   }
 }
 
-const clearTaskWaiter = () => {
+const clearTaskPolling = () => {
+  if (taskPollTimer) {
+    window.clearTimeout(taskPollTimer)
+    taskPollTimer = 0
+  }
+}
+
+const clearTaskWaiter = ({ rejectPending = true } = {}) => {
   clearTaskTimeout()
-  const reject = taskReject
+  clearTaskPolling()
+  const reject = rejectPending ? taskReject : null
   taskResolve = null
   taskReject = null
   if (reject) {
@@ -321,7 +331,7 @@ const resolveTaskWaiter = (task) => {
   }
 
   const resolve = taskResolve
-  clearTaskWaiter()
+  clearTaskWaiter({ rejectPending: false })
   resolve(task)
 }
 
@@ -331,7 +341,7 @@ const rejectTaskWaiter = (error) => {
   }
 
   const reject = taskReject
-  clearTaskWaiter()
+  clearTaskWaiter({ rejectPending: false })
   reject(error)
 }
 
@@ -440,6 +450,36 @@ const waitForTaskCompletion = (taskToken) => new Promise((resolve, reject) => {
   }, POLL_TIMEOUT_MS)
 })
 
+const scheduleTaskStatusPoll = (taskId, taskToken) => {
+  clearTaskPolling()
+
+  taskPollTimer = window.setTimeout(async () => {
+    if (taskToken !== activeTaskToken || !loading.value || currentImage.value?.id !== taskId) {
+      return
+    }
+
+    try {
+      const response = await imageApi.getImageStatus(taskId)
+      if (taskToken !== activeTaskToken || currentImage.value?.id !== taskId) {
+        return
+      }
+
+      const latest = applyTaskUpdate(response?.data || {})
+      if (isImageTerminalStatus(latest.status)) {
+        stopProgressAnimation()
+        resolveTaskWaiter(latest)
+        return
+      }
+    } catch (error) {
+      console.error('Task status poll failed:', error)
+    }
+
+    if (taskToken === activeTaskToken && loading.value && currentImage.value?.id === taskId) {
+      scheduleTaskStatusPoll(taskId, taskToken)
+    }
+  }, TASK_POLL_INTERVAL_MS)
+}
+
 const handleTaskSocketEvent = (event) => {
   if (event?.type !== 'image.task.updated') {
     return
@@ -497,9 +537,15 @@ const handleGenerate = async () => {
     })
 
     const initialStatus = normalizeImageStatus(currentImage.value?.status)
-    const finalImage = isImageTerminalStatus(initialStatus)
-      ? currentImage.value
-      : await waitForTaskCompletion(taskToken)
+    const completionPromise = isImageTerminalStatus(initialStatus)
+      ? Promise.resolve(currentImage.value)
+      : waitForTaskCompletion(taskToken)
+
+    if (!isImageTerminalStatus(initialStatus)) {
+      scheduleTaskStatusPoll(imageId, taskToken)
+    }
+
+    const finalImage = await completionPromise
     if (taskToken !== activeTaskToken) {
       return
     }
