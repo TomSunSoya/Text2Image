@@ -320,9 +320,15 @@ const handleCurrentChange = () => {
   loadHistory()
 }
 
+const isHttpUrl = (url) => typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'))
+
 const buildImageUrl = (row) => {
   if (row?.imageBase64) {
     return `data:image/png;base64,${String(row.imageBase64).replace(/\s/g, '')}`
+  }
+
+  if (isHttpUrl(row?.imageUrl)) {
+    return row.imageUrl
   }
 
   if (row?.__imageObjectUrl) {
@@ -356,6 +362,10 @@ const ensureBinaryLoaded = async (row) => {
   }
 
   if (!canDownloadImageTask(row?.status) || !row?.imageUrl) {
+    return
+  }
+
+  if (isHttpUrl(row.imageUrl)) {
     return
   }
 
@@ -411,21 +421,41 @@ const handleRowClick = (row, column, event) => {
 }
 
 const handleDownload = async (row) => {
-  if (!buildImageUrl(row)) {
-    await ensureRowVisual(row)
-  }
-
-  const imageUrl = buildImageUrl(row)
-  if (!imageUrl) {
+  if (!row?.id) {
     ElMessage.warning('No image available for this record')
     return
   }
 
-  const link = document.createElement('a')
-  link.href = imageUrl
-  link.download = `generated_${row.requestId || row.id}.png`
-  link.click()
-  ElMessage.success('Download started')
+  const url = buildImageUrl(row)
+
+  // For local URLs (data: or blob:), download directly
+  if (url && !isHttpUrl(url)) {
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `generated_${row.requestId || row.id}.png`
+    link.click()
+    ElMessage.success('Download started')
+    return
+  }
+
+  // For HTTP URLs or no URL, fetch via binary endpoint for proper download
+  try {
+    const response = await imageApi.getImageBinary(row.id)
+    const blob = response?.data
+    if (!(blob instanceof Blob)) {
+      throw new Error('invalid response')
+    }
+
+    const blobUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = `generated_${row.requestId || row.id}.png`
+    link.click()
+    URL.revokeObjectURL(blobUrl)
+    ElMessage.success('Download started')
+  } catch (error) {
+    ElMessage.error(error?.message || 'Download failed')
+  }
 }
 
 const handleCancel = async (row) => {

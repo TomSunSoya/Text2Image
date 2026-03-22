@@ -9,6 +9,7 @@
 #include "Backend.h"
 #include "db_manager.h"
 #include "image_service.h"
+#include "minio_client.h"
 
 int main()
 {
@@ -46,6 +47,26 @@ int main()
             spdlog::info("Database initialized: {}:{}", mysqlConfig.host, mysqlConfig.port);
         } catch (const std::exception& e) {
             spdlog::warn("Database initialization failed: {}", e.what());
+        }
+
+        // --- MinIO initialization ---
+        try {
+            const auto& minioConfig = config.at("minio");
+            MinioClient::Config minioCfg;
+            minioCfg.endpoint = minioConfig.value("endpoint", std::string("http://localhost:9000"));
+            minioCfg.access_key = minioConfig.value("access_key", std::string());
+            minioCfg.secret_key = minioConfig.value("secret_key", std::string());
+            minioCfg.bucket = minioConfig.value("bucket", std::string("zimage"));
+            minioCfg.region = minioConfig.value("region", std::string("us-east-1"));
+
+            MinioClient minio(minioCfg);
+            if (minio.ensureBucketExists()) {
+                spdlog::info("MinIO ready: {}/{}", minioCfg.endpoint, minioCfg.bucket);
+            } else {
+                spdlog::warn("MinIO bucket creation failed — image storage may not work");
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("MinIO initialization failed: {}", e.what());
         }
 
         const auto healthHandler =

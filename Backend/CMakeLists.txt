@@ -33,7 +33,7 @@ find_package(jwt-cpp CONFIG REQUIRED)
 find_package(unofficial-mysql-connector-cpp CONFIG REQUIRED)
 
 
-find_package(CURL CONFIG REQUIRED)
+find_package(miniocpp REQUIRED)
 
 # 编译 ./src 下所有 .cpp（含子目录）；.h 通过 #include 参与，无需单独列出
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
@@ -55,7 +55,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     nlohmann_json::nlohmann_json
     jwt-cpp::jwt-cpp
     unofficial::mysql-connector-cpp::connector
-    CURL::libcurl
+    miniocpp::miniocpp
 )
 
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
