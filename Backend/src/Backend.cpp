@@ -133,6 +133,11 @@ void applyEnvOverrides(nlohmann::json& config)
         taskEngine = nlohmann::json::object();
     }
 
+    auto& minio = config["minio"];
+    if (!minio.is_object()) {
+        minio = nlohmann::json::object();
+    }
+
     overrideString(server, "host", "BACKEND_HOST");
     overrideInt(server, "port", "BACKEND_PORT");
     overrideInt(server, "threads", "BACKEND_THREADS");
@@ -154,6 +159,13 @@ void applyEnvOverrides(nlohmann::json& config)
 	overrideInt(taskEngine, "lease_seconds", "TASK_ENGINE_LEASE_SECONDS");
 	overrideInt(taskEngine, "max_retries", "TASK_ENGINE_MAX_RETRIES");
 	overrideString(taskEngine, "worker_prefix", "TASK_ENGINE_WORKER_PREFIX");
+
+    overrideString(minio, "endpoint", "MINIO_ENDPOINT");
+    overrideString(minio, "access_key", "MINIO_ACCESS_KEY");
+    overrideString(minio, "secret_key", "MINIO_SECRET_KEY");
+    overrideString(minio, "bucket", "MINIO_BUCKET");
+    overrideString(minio, "region", "MINIO_REGION");
+    overrideInt(minio, "presign_expiry_seconds", "MINIO_PRESIGN_EXPIRY_SECONDS");
 }
 
 } // namespace

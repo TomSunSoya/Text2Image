@@ -144,16 +144,16 @@ void cleanupOrphanedStoredImage(const models::ImageGeneration& generation)
 
     try {
         ImageStorage storage;
-        const bool removed = storage.removeFile(generation.storage_key);
+        const bool removed = storage.remove(generation.storage_key);
         if (!removed) {
-            spdlog::warn("failed to remove orphaned storage file for task id={}, key={}",
+            spdlog::warn("failed to remove orphaned storage object for task id={}, key={}",
                          generation.id, generation.storage_key);
         }
     } catch (const std::exception& ex) {
-        spdlog::warn("failed to remove orphaned storage file for task id={}, key={}, reason={}",
+        spdlog::warn("failed to remove orphaned storage object for task id={}, key={}, reason={}",
                      generation.id, generation.storage_key, ex.what());
     } catch (...) {
-        spdlog::warn("failed to remove orphaned storage file for task id={}, key={}, reason=unknown",
+        spdlog::warn("failed to remove orphaned storage object for task id={}, key={}, reason=unknown",
                      generation.id, generation.storage_key);
     }
 }
@@ -377,10 +377,11 @@ void persistGeneratedImage(models::ImageGeneration& generation)
     }
 
     try {
+        const auto rawBytes = utils::decodeBase64(generation.image_base64);
         ImageStorage storage;
-        const auto stored = storage.storeBase64(generation.id, generation.request_id, generation.image_base64);
+        const auto stored = storage.store(generation.user_id, generation.request_id, rawBytes);
         generation.storage_key = stored.storage_key;
-        generation.image_url = stored.image_url;
+        generation.image_url = std::format("/api/images/{}/binary", generation.id);
         generation.image_base64.clear();
     } catch (const std::exception& ex) {
         generation.status = "failed";
@@ -649,16 +650,14 @@ std::expected<ImageGetResult, ServiceError> ImageService::getById(int64_t userId
             return std::unexpected(ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
         }
 
-        if (!includeImagePayload) {
-            image->image_base64.clear();
-        } else if (image->image_base64.empty() && !image->storage_key.empty()) {
-            ImageStorage storage;
-            std::string storageError;
-            if (auto base64 = storage.loadBase64(image->storage_key, storageError)) {
-                image->image_base64 = *base64;
-            } else {
-                spdlog::warn("ImageService::getById failed to load image payload, id={}, user_id={}, reason={}",
-                             id, userId, storageError);
+        image->image_base64.clear();
+        if (includeImagePayload && !image->storage_key.empty()) {
+            try {
+                ImageStorage storage;
+                image->image_url = storage.presignUrl(image->storage_key);
+            } catch (const std::exception& ex) {
+                spdlog::warn("ImageService::getById failed to generate presigned URL, id={}, user_id={}, reason={}",
+                             id, userId, ex.what());
             }
         }
 
@@ -757,12 +756,10 @@ std::expected<ImageBinaryResult, ServiceError> ImageService::getBinaryById(int64
         }
 
         ImageStorage storage;
-        std::string storageError;
-        auto bytes = storage.loadBytes(image->storage_key, storageError);
+        auto bytes = storage.getBytes(image->storage_key);
         if (!bytes) {
             ServiceError err{drogon::k500InternalServerError, "image_storage_read_failed", "failed to load image binary"};
             err.details["storageKey"] = image->storage_key;
-            err.details["reason"] = storageError;
             return std::unexpected(std::move(err));
         }
 
@@ -799,13 +796,13 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
             return std::unexpected(ServiceError{drogon::k409Conflict, "task_delete_conflict", "task cannot be deleted in its current state"});
         }
 
-        // Clean up the disk file to prevent storage leaks.
+        // Clean up the stored object to prevent storage leaks.
         if (!current->storage_key.empty()) {
             try {
                 ImageStorage storage;
-                storage.removeFile(current->storage_key);
+                storage.remove(current->storage_key);
             } catch (const std::exception& ex) {
-                spdlog::warn("ImageService::deleteById failed to remove storage file, id={}, key={}, reason={}",
+                spdlog::warn("ImageService::deleteById failed to remove storage object, id={}, key={}, reason={}",
                              id, current->storage_key, ex.what());
             }
         }

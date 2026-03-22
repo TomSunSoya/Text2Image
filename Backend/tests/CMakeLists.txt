@@ -20,7 +20,7 @@ set(TEST_LIBS
     nlohmann_json::nlohmann_json
     jwt-cpp::jwt-cpp
     unofficial::mysql-connector-cpp::connector
-    CURL::libcurl
+    miniocpp::miniocpp
 )
 
 # ---------- Unit tests (no database needed) ----------

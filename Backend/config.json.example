@@ -35,6 +35,14 @@
     "allow_methods": [ "GET", "POST", "PUT", "DELETE", "OPTIONS" ],
     "allow_headers": [ "Content-Type", "Authorization" ]
   },
+  "minio": {
+    "endpoint": "http://localhost:9000",
+    "access_key": "minioadmin",
+    "secret_key": "minioadmin",
+    "bucket": "zimage",
+    "region": "us-east-1",
+    "presign_expiry_seconds": 3600
+  },
   "storage": {
     "root_dir": "storage/images",
     "public_url_prefix": "/api/images",
