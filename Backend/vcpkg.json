@@ -7,7 +7,7 @@
     "nlohmann-json",
     "jwt-cpp",
     "mysql-connector-cpp",
-    "curl",
+    "minio-cpp",
     "gtest"
   ]
 }

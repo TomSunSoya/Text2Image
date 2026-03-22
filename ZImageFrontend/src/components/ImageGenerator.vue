@@ -277,6 +277,8 @@ const rules = {
   ]
 }
 
+const isHttpUrl = (url) => typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'))
+
 const imageDataUrl = computed(() => {
   const rawBase64 = currentImage.value?.imageBase64
   if (rawBase64 && typeof rawBase64 === 'string') {
@@ -284,6 +286,11 @@ const imageDataUrl = computed(() => {
     if (trimmed) {
       return `data:image/png;base64,${trimmed}`
     }
+  }
+
+  const imageUrl = currentImage.value?.imageUrl
+  if (isHttpUrl(imageUrl)) {
+    return imageUrl
   }
 
   if (binaryImageUrl.value) {
@@ -391,6 +398,10 @@ const resetBinaryPreview = () => {
 
 const loadBinaryPreview = async (image) => {
   if (!image?.id || !image?.imageUrl || image?.imageBase64 || normalizeImageStatus(image?.status) !== 'success') {
+    return
+  }
+
+  if (isHttpUrl(image.imageUrl)) {
     return
   }
 
@@ -636,19 +647,36 @@ const handleDownload = async () => {
       return
     }
 
-    if (!imageDataUrl.value && currentImage.value.imageUrl) {
-      await loadBinaryPreview(currentImage.value)
+    const url = imageDataUrl.value
+
+    // For local URLs (data: or blob:), download directly
+    if (url && !isHttpUrl(url)) {
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `generated_${currentImage.value.requestId || Date.now()}.png`
+      link.click()
+      ElMessage.success('Download started')
+      return
     }
 
-    if (!imageDataUrl.value) {
+    // For HTTP URLs or no URL, fetch via binary endpoint for proper download
+    if (!currentImage.value.id) {
       ElMessage.warning('No image data available yet')
       return
     }
 
+    const response = await imageApi.getImageBinary(currentImage.value.id)
+    const blob = response?.data
+    if (!(blob instanceof Blob)) {
+      throw new Error('invalid image binary response')
+    }
+
+    const blobUrl = URL.createObjectURL(blob)
     const link = document.createElement('a')
-    link.href = imageDataUrl.value
+    link.href = blobUrl
     link.download = `generated_${currentImage.value.requestId || Date.now()}.png`
     link.click()
+    URL.revokeObjectURL(blobUrl)
     ElMessage.success('Download started')
   } catch (error) {
     ElMessage.error(error?.message || 'Download failed')
@@ -683,6 +711,10 @@ watch(
     }
 
     if (!next.id || !next.imageUrl || next.imageBase64 || normalizeImageStatus(next.status) !== 'success') {
+      return
+    }
+
+    if (isHttpUrl(next.imageUrl)) {
       return
     }
 
