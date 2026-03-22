@@ -75,9 +75,17 @@ TEST_F(ImageFlowTest, CreateWithAllParameters)
 TEST_F(ImageFlowTest, CreateEmptyPromptFails)
 {
     ImageService service;
-    auto result = service.create(userId_, {{"prompt", ""}});
+    auto result = service.create(userId_, {{"prompt", "   "}});
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, "prompt_required");
+}
+
+TEST_F(ImageFlowTest, CreateTooShortPromptFails)
+{
+    ImageService service;
+    auto result = service.create(userId_, {{"prompt", "ab"}});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, "invalid_prompt_length");
 }
 
 TEST_F(ImageFlowTest, CreateUnauthorizedFails)
@@ -135,8 +143,8 @@ TEST_F(ImageFlowTest, ListMyPagination)
 TEST_F(ImageFlowTest, ListMyByStatus)
 {
     ImageService service;
-    (void)service.create(userId_, {{"prompt", "a"}});
-    (void)service.create(userId_, {{"prompt", "b"}});
+    (void)service.create(userId_, {{"prompt", "ant"}});
+    (void)service.create(userId_, {{"prompt", "bee"}});
 
     auto queued = service.listMyByStatus(userId_, "queued", 0, 10);
     ASSERT_TRUE(queued.has_value());
