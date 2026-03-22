@@ -45,7 +45,7 @@ LOCAL_MODEL_PATH = os.getenv(
 PORT = read_int_env("MODEL_SERVICE_PORT", 8081)
 LOG_DIR = os.getenv("MODEL_SERVICE_LOG_DIR", "./logs")
 TEMP_DIR = os.getenv("MODEL_SERVICE_TEMP_DIR", "./temp")
-ALLOW_ORIGINS = read_list_env("MODEL_SERVICE_ALLOW_ORIGINS", ["*"])
+ALLOW_ORIGINS = read_list_env("MODEL_SERVICE_ALLOW_ORIGINS", ["http://localhost:3000"])
 MAX_CONCURRENT_GENERATIONS = max(1, read_int_env("MODEL_SERVICE_MAX_CONCURRENT_GENERATIONS", 1))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -64,6 +64,12 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+if "*" in ALLOW_ORIGINS:
+    logger.warning(
+        "CORS allow_origins contains '*' — all origins accepted. "
+        "Set MODEL_SERVICE_ALLOW_ORIGINS for production."
+    )
 
 PROMPT_MIN_LENGTH = 3
 PROMPT_MAX_LENGTH = 1000

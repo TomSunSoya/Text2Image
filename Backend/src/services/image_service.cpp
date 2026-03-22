@@ -484,6 +484,67 @@ void ensureWorkersStarted() {
 	});
 }
 
+constexpr size_t kPromptMinLength = 3;
+constexpr size_t kPromptMaxLength = 1000;
+constexpr size_t kNegativePromptMaxLength = 500;
+constexpr int kMinImageSize = 512;
+constexpr int kMaxImageSize = 2048;
+constexpr int kImageSizeStep = 64;
+constexpr int kMinNumSteps = 1;
+constexpr int kMaxNumSteps = 50;
+
+void trimInPlace(std::string& s)
+{
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(),
+        [](unsigned char c) { return !std::isspace(c); }));
+    s.erase(std::find_if(s.rbegin(), s.rend(),
+        [](unsigned char c) { return !std::isspace(c); }).base(), s.end());
+}
+
+std::optional<ServiceError> validateGenerationParams(models::ImageGeneration& generation)
+{
+    trimInPlace(generation.prompt);
+    trimInPlace(generation.negative_prompt);
+
+    if (generation.prompt.empty()) {
+        return ServiceError{drogon::k400BadRequest, "prompt_required", "prompt is required"};
+    }
+
+    if (generation.prompt.size() < kPromptMinLength || generation.prompt.size() > kPromptMaxLength) {
+        return ServiceError{drogon::k400BadRequest, "invalid_prompt_length",
+            std::format("prompt length must be between {} and {} characters",
+                        kPromptMinLength, kPromptMaxLength)};
+    }
+
+    if (generation.negative_prompt.size() > kNegativePromptMaxLength) {
+        return ServiceError{drogon::k400BadRequest, "invalid_negative_prompt_length",
+            std::format("negative_prompt must be at most {} characters", kNegativePromptMaxLength)};
+    }
+
+    if (generation.num_steps < kMinNumSteps || generation.num_steps > kMaxNumSteps) {
+        return ServiceError{drogon::k400BadRequest, "invalid_num_steps",
+            std::format("num_steps must be between {} and {}", kMinNumSteps, kMaxNumSteps)};
+    }
+
+    if (generation.width < kMinImageSize || generation.width > kMaxImageSize || generation.width % kImageSizeStep != 0) {
+        return ServiceError{drogon::k400BadRequest, "invalid_width",
+            std::format("width must be between {} and {} and a multiple of {}",
+                        kMinImageSize, kMaxImageSize, kImageSizeStep)};
+    }
+
+    if (generation.height < kMinImageSize || generation.height > kMaxImageSize || generation.height % kImageSizeStep != 0) {
+        return ServiceError{drogon::k400BadRequest, "invalid_height",
+            std::format("height must be between {} and {} and a multiple of {}",
+                        kMinImageSize, kMaxImageSize, kImageSizeStep)};
+    }
+
+    if (generation.seed.has_value() && generation.seed.value() < 0) {
+        return ServiceError{drogon::k400BadRequest, "invalid_seed", "seed must be >= 0"};
+    }
+
+    return std::nullopt;
+}
+
 } // namespace
 
 void ImageService::bootstrapWorkers()
@@ -499,8 +560,9 @@ std::expected<ImageCreateResult, ServiceError> ImageService::create(int64_t user
     }
 
     models::ImageGeneration generation = models::ImageGeneration::fromJson(payload);
-    if (generation.prompt.empty()) {
-        return std::unexpected(ServiceError{drogon::k400BadRequest, "prompt_required", "prompt is required"});
+
+    if (auto validationError = validateGenerationParams(generation)) {
+        return std::unexpected(std::move(*validationError));
     }
 
     generation.user_id = userId;

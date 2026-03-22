@@ -15,12 +15,12 @@ using traits = jwt::traits::nlohmann_json;
 const std::string& loadSecret()
 {
     static const std::string secret = [] {
-        try {
-            const auto& config = backend::cachedConfig();
-            return config.at("jwt").at("secret").get<std::string>();
-        } catch (...) {
-            return std::string("development-secret-change-me");
+        const auto& config = backend::cachedConfig();
+        auto value = config.at("jwt").at("secret").get<std::string>();
+        if (value.empty()) {
+            throw std::runtime_error("jwt.secret is empty — set JWT_SECRET env var or update config.json");
         }
+        return value;
     }();
     return secret;
 }
