@@ -81,17 +81,21 @@ Canonical task statuses currently used across the stack:
 - `plan.md`: long-term optimization plan for the full stack
 
 ## 6. Quick Start
+
+### Prerequisites
+- `VCPKG_ROOT` environment variable must point to your vcpkg installation (e.g. `C:\Users\you\tools\vcpkg`)
+
 Start the services in this order.
 
 ### 6.1 Model Service
 ```powershell
-cd D:\project\Text2Image\ModelService
+cd ModelService
 python model_service.py
 ```
 
 ### 6.2 Backend
 ```powershell
-cd D:\project\Text2Image\Backend
+cd Backend
 cmake --preset x64-debug
 cmake --build out\build\x64-debug --config Debug
 .\out\build\x64-debug\Debug\Backend.exe
@@ -99,10 +103,19 @@ cmake --build out\build\x64-debug --config Debug
 
 ### 6.3 Frontend
 ```powershell
-cd D:\project\Text2Image\ZImageFrontend
+cd ZImageFrontend
 npm install
 npm run dev
 ```
+
+### 6.4 VSCode Workflow
+If you open the repository root in VSCode, use these commands:
+
+- `CMake: Select Configure Preset` -> `x64-debug`
+- `CMake: Delete Cache and Reconfigure` after toolchain changes
+- `CMake: Build` to build the backend
+- start frontend and model service from the integrated terminal with the commands above
+- local `tasks.json` / `launch.json` can be added per developer if you want one-click run or debugging
 
 ## 7. Configuration
 
