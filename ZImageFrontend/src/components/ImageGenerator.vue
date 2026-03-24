@@ -285,14 +285,6 @@ const isHttpUrl = (url) =>
   typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'));
 
 const imageDataUrl = computed(() => {
-  const rawBase64 = currentImage.value?.imageBase64;
-  if (rawBase64 && typeof rawBase64 === 'string') {
-    const trimmed = rawBase64.replace(/\s/g, '');
-    if (trimmed) {
-      return `data:image/png;base64,${trimmed}`;
-    }
-  }
-
   const imageUrl = currentImage.value?.imageUrl;
   if (isHttpUrl(imageUrl)) {
     return imageUrl;
@@ -402,12 +394,7 @@ const resetBinaryPreview = () => {
 };
 
 const loadBinaryPreview = async (image) => {
-  if (
-    !image?.id ||
-    !image?.imageUrl ||
-    image?.imageBase64 ||
-    normalizeImageStatus(image?.status) !== 'success'
-  ) {
+  if (!image?.id || !image?.imageUrl || normalizeImageStatus(image?.status) !== 'success') {
     return;
   }
 
@@ -714,19 +701,13 @@ watch(
     id: currentImage.value?.id,
     status: currentImage.value?.status,
     imageUrl: currentImage.value?.imageUrl,
-    imageBase64: currentImage.value?.imageBase64,
   }),
   async (next, previous) => {
-    if (next.id !== previous?.id || next.imageBase64) {
+    if (next.id !== previous?.id || next.imageUrl !== previous?.imageUrl) {
       resetBinaryPreview();
     }
 
-    if (
-      !next.id ||
-      !next.imageUrl ||
-      next.imageBase64 ||
-      normalizeImageStatus(next.status) !== 'success'
-    ) {
+    if (!next.id || !next.imageUrl || normalizeImageStatus(next.status) !== 'success') {
       return;
     }
 

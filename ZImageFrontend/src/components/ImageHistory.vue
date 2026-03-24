@@ -233,7 +233,7 @@ const normalizeRow = (item, previousRow = null) => {
 
   return {
     ...merged,
-    __detailLoaded: Boolean(merged?.imageBase64) || Boolean(previousRow?.__detailLoaded),
+    __detailLoaded: Boolean(previousRow?.__detailLoaded),
     __detailLoading: false,
     __binaryLoading: false,
     __actionType: '',
@@ -346,10 +346,6 @@ const isHttpUrl = (url) =>
   typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'));
 
 const buildImageUrl = (row) => {
-  if (row?.imageBase64) {
-    return `data:image/png;base64,${String(row.imageBase64).replace(/\s/g, '')}`;
-  }
-
   if (isHttpUrl(row?.imageUrl)) {
     return row.imageUrl;
   }
@@ -380,7 +376,7 @@ const ensureRowDetail = async (row) => {
 };
 
 const ensureBinaryLoaded = async (row) => {
-  if (!row?.id || row.__binaryLoading || row.__imageObjectUrl || row?.imageBase64) {
+  if (!row?.id || row.__binaryLoading || row.__imageObjectUrl) {
     return;
   }
 
@@ -418,9 +414,7 @@ const ensureRowVisual = async (row) => {
     await ensureRowDetail(row);
   }
 
-  if (!row.imageBase64) {
-    await ensureBinaryLoaded(row);
-  }
+  await ensureBinaryLoaded(row);
 };
 
 const handleExpandChange = (row, expandedRows) => {

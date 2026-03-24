@@ -49,14 +49,6 @@ TEST(ImageGeneration_FromJson, CamelCaseKeys) {
     EXPECT_EQ(gen.worker_id, "w-1");
 }
 
-TEST(ImageGeneration_FromJson, IgnoresBase64Fields) {
-    nlohmann::json j = {{"image_base64", "abc123"}, {"imageBase64", "xyz456"}};
-
-    auto gen = models::ImageGeneration::fromJson(j);
-    EXPECT_TRUE(gen.image_bytes.empty());
-    EXPECT_TRUE(gen.image_url.empty());
-}
-
 TEST(ImageGeneration_FromJson, MissingOptionalFields) {
     nlohmann::json j = {{"prompt", "hello"}};
     auto gen = models::ImageGeneration::fromJson(j);
@@ -109,13 +101,6 @@ TEST(ImageGeneration_ToJson, SeedExcludedWhenAbsent) {
     gen.seed = std::nullopt;
     auto j = gen.toJson();
     EXPECT_FALSE(j.contains("seed"));
-}
-
-TEST(ImageGeneration_ToJson, NeverIncludesImageBase64) {
-    models::ImageGeneration gen;
-    gen.image_bytes = "raw-png-bytes";
-    auto j = gen.toJson();
-    EXPECT_FALSE(j.contains("imageBase64"));
 }
 
 TEST(ImageGeneration_ToJson, OptionalTimesIncludedWhenSet) {
