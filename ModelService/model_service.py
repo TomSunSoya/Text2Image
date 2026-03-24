@@ -58,8 +58,10 @@ MAX_CONCURRENT_GENERATIONS = max(1, read_int_env("MODEL_SERVICE_MAX_CONCURRENT_G
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DTYPE = select_model_dtype(DEVICE)
 MODEL_DTYPE_NAME = str(MODEL_DTYPE).replace("torch.", "")
+PROMPT_MIN_LENGTH = 3
 MAX_PROMPT_LENGTH = max(1, read_int_env("MODEL_SERVICE_MAX_PROMPT_LENGTH", 2000))
 MAX_NEGATIVE_PROMPT_LENGTH = max(1, read_int_env("MODEL_SERVICE_MAX_NEGATIVE_PROMPT_LENGTH", 2000))
+MIN_NUM_STEPS = 1
 MAX_NUM_STEPS = max(1, read_int_env("MODEL_SERVICE_MAX_NUM_STEPS", 50))
 MIN_IMAGE_SIDE = max(64, read_int_env("MODEL_SERVICE_MIN_IMAGE_SIDE", 256))
 MAX_IMAGE_SIDE = max(MIN_IMAGE_SIDE, read_int_env("MODEL_SERVICE_MAX_IMAGE_SIDE", 1024))
@@ -92,16 +94,6 @@ if "*" in ALLOW_ORIGINS:
         "Set MODEL_SERVICE_ALLOW_ORIGINS for production."
     )
 
-PROMPT_MIN_LENGTH = 3
-PROMPT_MAX_LENGTH = 1000
-NEGATIVE_PROMPT_MAX_LENGTH = 500
-MIN_IMAGE_SIZE = 512
-MAX_IMAGE_SIZE = 2048
-IMAGE_SIZE_STEP = 64
-MIN_NUM_STEPS = 1
-MAX_NUM_STEPS = 50
-REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-
 
 def resolve_temp_file(filename: str) -> Path:
     candidate = (TEMP_PATH / filename).resolve()
@@ -121,12 +113,20 @@ def validate_generate_request(request: "GenerateRequest") -> "GenerateRequest":
 
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt must not be empty")
+    if len(prompt) < PROMPT_MIN_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"prompt length must be at least {PROMPT_MIN_LENGTH} characters",
+        )
     if len(prompt) > MAX_PROMPT_LENGTH:
         raise HTTPException(status_code=400, detail=f"prompt exceeds max length {MAX_PROMPT_LENGTH}")
     if len(negative_prompt) > MAX_NEGATIVE_PROMPT_LENGTH:
         raise HTTPException(status_code=400, detail=f"negative_prompt exceeds max length {MAX_NEGATIVE_PROMPT_LENGTH}")
-    if request.num_steps < 1 or request.num_steps > MAX_NUM_STEPS:
-        raise HTTPException(status_code=400, detail=f"num_steps must be between 1 and {MAX_NUM_STEPS}")
+    if request.num_steps < MIN_NUM_STEPS or request.num_steps > MAX_NUM_STEPS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"num_steps must be between {MIN_NUM_STEPS} and {MAX_NUM_STEPS}",
+        )
 
     for field_name, value in (("height", request.height), ("width", request.width)):
         if value < MIN_IMAGE_SIDE or value > MAX_IMAGE_SIDE:
@@ -145,6 +145,9 @@ def validate_generate_request(request: "GenerateRequest") -> "GenerateRequest":
             status_code=400,
             detail=f"image size exceeds max pixel budget {MAX_IMAGE_PIXELS}",
         )
+
+    if request.seed is not None and request.seed < 0:
+        raise HTTPException(status_code=400, detail="seed must be greater than or equal to 0")
 
     if request_id is not None and not REQUEST_ID_PATTERN.fullmatch(request_id):
         raise HTTPException(
@@ -195,57 +198,6 @@ class GenerateResponse(BaseModel):
     message: str
     timestamp: str
     generation_time: Optional[float] = None
-
-
-def validate_generate_request(request: GenerateRequest) -> GenerateRequest:
-    request.prompt = (request.prompt or "").strip()
-    request.negative_prompt = (request.negative_prompt or "").strip()
-
-    if len(request.prompt) < PROMPT_MIN_LENGTH or len(request.prompt) > PROMPT_MAX_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"prompt length must be between {PROMPT_MIN_LENGTH} and {PROMPT_MAX_LENGTH} characters",
-        )
-
-    if len(request.negative_prompt) > NEGATIVE_PROMPT_MAX_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"negative_prompt must be at most {NEGATIVE_PROMPT_MAX_LENGTH} characters",
-        )
-
-    if request.num_steps < MIN_NUM_STEPS or request.num_steps > MAX_NUM_STEPS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"num_steps must be between {MIN_NUM_STEPS} and {MAX_NUM_STEPS}",
-        )
-
-    for field_name in ("width", "height"):
-        value = getattr(request, field_name)
-        if value < MIN_IMAGE_SIZE or value > MAX_IMAGE_SIZE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{field_name} must be between {MIN_IMAGE_SIZE} and {MAX_IMAGE_SIZE}",
-            )
-        if value % IMAGE_SIZE_STEP != 0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{field_name} must be a multiple of {IMAGE_SIZE_STEP}",
-            )
-
-    if request.seed is not None and request.seed < 0:
-        raise HTTPException(status_code=400, detail="seed must be greater than or equal to 0")
-
-    if request.request_id is not None:
-        request.request_id = request.request_id.strip()
-        if not request.request_id:
-            request.request_id = None
-        elif not REQUEST_ID_PATTERN.fullmatch(request.request_id):
-            raise HTTPException(
-                status_code=400,
-                detail="request_id may only contain letters, numbers, dot, underscore, and hyphen",
-            )
-
-    return request
 
 
 class ZImageModelService:

@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <drogon/HttpAppFramework.h>
@@ -71,7 +73,23 @@ int main() {
             minioCfg.region = minioConfig.value("region", std::string("us-east-1"));
 
             MinioClient minio(minioCfg);
-            if (minio.ensureBucketExists()) {
+            constexpr int kMinioMaxAttempts = 10;
+            constexpr auto kMinioRetryDelay = std::chrono::seconds(2);
+            bool minioReady = false;
+            for (int attempt = 1; attempt <= kMinioMaxAttempts; ++attempt) {
+                if (minio.ensureBucketExists()) {
+                    minioReady = true;
+                    break;
+                }
+
+                if (attempt < kMinioMaxAttempts) {
+                    spdlog::warn("MinIO not ready yet ({}/{}), retrying in {}s",
+                                 attempt, kMinioMaxAttempts, kMinioRetryDelay.count());
+                    std::this_thread::sleep_for(kMinioRetryDelay);
+                }
+            }
+
+            if (minioReady) {
                 spdlog::info("MinIO ready: {}/{}", minioCfg.endpoint, minioCfg.bucket);
             } else {
                 spdlog::warn("MinIO bucket creation failed — image storage may not work");
