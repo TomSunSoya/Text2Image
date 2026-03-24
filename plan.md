@@ -121,7 +121,7 @@ Define a single task contract used across frontend, backend, and model service.
 - make frontend and backend behavior consistent for cancelled tasks
 
 ### 6. Move binary storage out of the main task record
-- stop treating database base64 fields as the primary long-term image store
+- keep database metadata records lightweight and free of inline image payloads
 - write outputs to object storage or file storage
 - keep only metadata and retrievable URLs in MySQL
 - generate thumbnails or derived assets if needed
