@@ -1,4 +1,4 @@
-import request from '@/utils/request'
+import request from '@/utils/request';
 
 export const imageApi = {
   // Generate image (async queue mode)
@@ -6,24 +6,24 @@ export const imageApi = {
     return request({
       url: '/images',
       method: 'post',
-      data
-    })
+      data,
+    });
   },
 
   // Poll task status by image ID
   getImageStatus(id) {
     return request({
       url: `/images/${id}/status`,
-      method: 'get'
-    })
+      method: 'get',
+    });
   },
 
   // Get image by ID
   getImageById(id) {
     return request({
       url: `/images/${id}`,
-      method: 'get'
-    })
+      method: 'get',
+    });
   },
 
   // Get protected image binary by ID
@@ -31,8 +31,8 @@ export const imageApi = {
     return request({
       url: `/images/${id}/binary`,
       method: 'get',
-      responseType: 'blob'
-    })
+      responseType: 'blob',
+    });
   },
 
   // Get current user's image list
@@ -40,8 +40,8 @@ export const imageApi = {
     return request({
       url: '/images/my-list',
       method: 'get',
-      params
-    })
+      params,
+    });
   },
 
   // Get images by status
@@ -49,39 +49,39 @@ export const imageApi = {
     return request({
       url: `/images/my-list/status/${status}`,
       method: 'get',
-      params
-    })
+      params,
+    });
   },
 
   // Delete image
   deleteImage(id) {
     return request({
       url: `/images/${id}`,
-      method: 'delete'
-    })
+      method: 'delete',
+    });
   },
 
   // Cancel queued/running task
   cancelImage(id) {
     return request({
       url: `/images/${id}/cancel`,
-      method: 'post'
-    })
+      method: 'post',
+    });
   },
 
   // Retry failed/cancelled/timeout task
   retryImage(id) {
     return request({
       url: `/images/${id}/retry`,
-      method: 'post'
-    })
+      method: 'post',
+    });
   },
 
   // Check health
   checkHealth() {
     return request({
       url: '/images/health',
-      method: 'get'
-    })
-  }
-}
+      method: 'get',
+    });
+  },
+};

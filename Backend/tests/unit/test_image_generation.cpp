@@ -3,16 +3,13 @@
 
 // ==================== fromJson ====================
 
-TEST(ImageGeneration_FromJson, BasicFields)
-{
-    nlohmann::json j = {
-        {"prompt",           "a cat in space"},
-        {"negative_prompt",  "blurry"},
-        {"num_steps",        20},
-        {"height",           512},
-        {"width",            512},
-        {"seed",             42}
-    };
+TEST(ImageGeneration_FromJson, BasicFields) {
+    nlohmann::json j = {{"prompt", "a cat in space"},
+                        {"negative_prompt", "blurry"},
+                        {"num_steps", 20},
+                        {"height", 512},
+                        {"width", 512},
+                        {"seed", 42}};
 
     auto gen = models::ImageGeneration::fromJson(j);
     EXPECT_EQ(gen.prompt, "a cat in space");
@@ -24,22 +21,19 @@ TEST(ImageGeneration_FromJson, BasicFields)
     EXPECT_EQ(gen.seed.value(), 42);
 }
 
-TEST(ImageGeneration_FromJson, CamelCaseKeys)
-{
-    nlohmann::json j = {
-        {"prompt",          "test"},
-        {"negativePrompt",  "ugly"},
-        {"numSteps",        15},
-        {"requestId",       "req-1"},
-        {"imageUrl",        "http://example.com/img.png"},
-        {"storageKey",      "task-1.png"},
-        {"errorMessage",    "oops"},
-        {"generationTime",  12.5},
-        {"retryCount",      2},
-        {"maxRetries",      3},
-        {"failureCode",     "timeout"},
-        {"workerId",        "w-1"}
-    };
+TEST(ImageGeneration_FromJson, CamelCaseKeys) {
+    nlohmann::json j = {{"prompt", "test"},
+                        {"negativePrompt", "ugly"},
+                        {"numSteps", 15},
+                        {"requestId", "req-1"},
+                        {"imageUrl", "http://example.com/img.png"},
+                        {"storageKey", "task-1.png"},
+                        {"errorMessage", "oops"},
+                        {"generationTime", 12.5},
+                        {"retryCount", 2},
+                        {"maxRetries", 3},
+                        {"failureCode", "timeout"},
+                        {"workerId", "w-1"}};
 
     auto gen = models::ImageGeneration::fromJson(j);
     EXPECT_EQ(gen.negative_prompt, "ugly");
@@ -55,8 +49,7 @@ TEST(ImageGeneration_FromJson, CamelCaseKeys)
     EXPECT_EQ(gen.worker_id, "w-1");
 }
 
-TEST(ImageGeneration_FromJson, MissingOptionalFields)
-{
+TEST(ImageGeneration_FromJson, MissingOptionalFields) {
     nlohmann::json j = {{"prompt", "hello"}};
     auto gen = models::ImageGeneration::fromJson(j);
     EXPECT_EQ(gen.prompt, "hello");
@@ -65,8 +58,7 @@ TEST(ImageGeneration_FromJson, MissingOptionalFields)
     EXPECT_EQ(gen.image_url, "");
 }
 
-TEST(ImageGeneration_FromJson, EmptyJson)
-{
+TEST(ImageGeneration_FromJson, EmptyJson) {
     auto gen = models::ImageGeneration::fromJson(nlohmann::json::object());
     EXPECT_EQ(gen.prompt, "");
     EXPECT_EQ(gen.id, 0);
@@ -74,8 +66,7 @@ TEST(ImageGeneration_FromJson, EmptyJson)
 
 // ==================== toJson ====================
 
-TEST(ImageGeneration_ToJson, BasicFields)
-{
+TEST(ImageGeneration_ToJson, BasicFields) {
     models::ImageGeneration gen;
     gen.id = 42;
     gen.user_id = 1;
@@ -97,8 +88,7 @@ TEST(ImageGeneration_ToJson, BasicFields)
     EXPECT_EQ(j.at("width"), 768);
 }
 
-TEST(ImageGeneration_ToJson, SeedIncludedWhenPresent)
-{
+TEST(ImageGeneration_ToJson, SeedIncludedWhenPresent) {
     models::ImageGeneration gen;
     gen.seed = 99;
     auto j = gen.toJson(false);
@@ -106,16 +96,14 @@ TEST(ImageGeneration_ToJson, SeedIncludedWhenPresent)
     EXPECT_EQ(j.at("seed"), 99);
 }
 
-TEST(ImageGeneration_ToJson, SeedExcludedWhenAbsent)
-{
+TEST(ImageGeneration_ToJson, SeedExcludedWhenAbsent) {
     models::ImageGeneration gen;
     gen.seed = std::nullopt;
     auto j = gen.toJson(false);
     EXPECT_FALSE(j.contains("seed"));
 }
 
-TEST(ImageGeneration_ToJson, IncludeImagePayloadTrue)
-{
+TEST(ImageGeneration_ToJson, IncludeImagePayloadTrue) {
     models::ImageGeneration gen;
     gen.image_base64 = "abc123base64";
     auto j = gen.toJson(true);
@@ -123,32 +111,28 @@ TEST(ImageGeneration_ToJson, IncludeImagePayloadTrue)
     EXPECT_EQ(j.at("imageBase64"), "abc123base64");
 }
 
-TEST(ImageGeneration_ToJson, IncludeImagePayloadFalse)
-{
+TEST(ImageGeneration_ToJson, IncludeImagePayloadFalse) {
     models::ImageGeneration gen;
     gen.image_base64 = "abc123base64";
     auto j = gen.toJson(false);
     EXPECT_FALSE(j.contains("imageBase64"));
 }
 
-TEST(ImageGeneration_ToJson, EmptyBase64NotIncludedEvenWhenTrue)
-{
+TEST(ImageGeneration_ToJson, EmptyBase64NotIncludedEvenWhenTrue) {
     models::ImageGeneration gen;
     gen.image_base64 = "";
     auto j = gen.toJson(true);
     EXPECT_FALSE(j.contains("imageBase64"));
 }
 
-TEST(ImageGeneration_ToJson, OptionalTimesIncludedWhenSet)
-{
+TEST(ImageGeneration_ToJson, OptionalTimesIncludedWhenSet) {
     models::ImageGeneration gen;
     gen.completed_at = std::chrono::system_clock::now();
     auto j = gen.toJson(false);
     EXPECT_TRUE(j.contains("completedAt"));
 }
 
-TEST(ImageGeneration_ToJson, OptionalTimesExcludedWhenUnset)
-{
+TEST(ImageGeneration_ToJson, OptionalTimesExcludedWhenUnset) {
     models::ImageGeneration gen;
     gen.completed_at = std::nullopt;
     gen.started_at = std::nullopt;
@@ -161,8 +145,7 @@ TEST(ImageGeneration_ToJson, OptionalTimesExcludedWhenUnset)
 
 // ==================== isTerminal ====================
 
-TEST(ImageGeneration_IsTerminal, MatchesTaskStateMachine)
-{
+TEST(ImageGeneration_IsTerminal, MatchesTaskStateMachine) {
     models::ImageGeneration gen;
 
     gen.status = "success";

@@ -87,7 +87,13 @@
         </el-form-item>
 
         <el-form-item>
-          <el-button type="primary" :loading="loading" :disabled="loading" size="large" @click="handleGenerate">
+          <el-button
+            type="primary"
+            :loading="loading"
+            :disabled="loading"
+            size="large"
+            @click="handleGenerate"
+          >
             {{ loading ? 'Generating...' : 'Generate Image' }}
           </el-button>
           <el-button size="large" @click="handleReset">Reset</el-button>
@@ -172,7 +178,11 @@
             >
               {{ cancelling ? 'Cancelling...' : 'Cancel Task' }}
             </el-button>
-            <el-button type="primary" :disabled="!canDownloadCurrentImage || imageBinaryLoading" @click="handleDownload">
+            <el-button
+              type="primary"
+              :disabled="!canDownloadCurrentImage || imageBinaryLoading"
+              @click="handleDownload"
+            >
               <el-icon><Download /></el-icon>
               Download
             </el-button>
@@ -188,69 +198,69 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Picture, Download, CopyDocument } from '@element-plus/icons-vue'
-import { imageApi } from '@/api/image'
-import { useImageStore } from '@/stores/image'
-import { subscribeTaskEvents } from '@/utils/taskSocket'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ElMessage } from 'element-plus';
+import { Picture, Download, CopyDocument } from '@element-plus/icons-vue';
+import { imageApi } from '@/api/image';
+import { useImageStore } from '@/stores/image';
+import { subscribeTaskEvents } from '@/utils/taskSocket';
 import {
   canCancelImageTask,
   canDownloadImageTask,
   getImageStatusTagType,
   isImageTerminalStatus,
-  normalizeImageStatus
-} from '@/utils/imageTask'
+  normalizeImageStatus,
+} from '@/utils/imageTask';
 
-const POLL_TIMEOUT_MS = 8 * 60 * 1000
-const TASK_POLL_INTERVAL_MS = 2500
+const POLL_TIMEOUT_MS = 8 * 60 * 1000;
+const TASK_POLL_INTERVAL_MS = 2500;
 
-const imageStore = useImageStore()
-const formRef = ref(null)
-const loading = ref(false)
-const cancelling = ref(false)
-const progress = ref(0)
-const progressPercentage = computed(() => Math.floor(progress.value))
-const healthStatus = ref('unknown')
-const currentImage = ref(null)
-const imageBinaryLoading = ref(false)
-const binaryImageUrl = ref('')
-let activeBinaryToken = 0
-let activeTaskToken = 0
-let socketUnsubscribe = null
-let progressTimer = 0
-let taskPollTimer = 0
-let taskTimeoutId = 0
-let taskResolve = null
-let taskReject = null
+const imageStore = useImageStore();
+const formRef = ref(null);
+const loading = ref(false);
+const cancelling = ref(false);
+const progress = ref(0);
+const progressPercentage = computed(() => Math.floor(progress.value));
+const healthStatus = ref('unknown');
+const currentImage = ref(null);
+const imageBinaryLoading = ref(false);
+const binaryImageUrl = ref('');
+let activeBinaryToken = 0;
+let activeTaskToken = 0;
+let socketUnsubscribe = null;
+let progressTimer = 0;
+let taskPollTimer = 0;
+let taskTimeoutId = 0;
+let taskResolve = null;
+let taskReject = null;
 
 const statusTagType = computed(() => {
-  return getImageStatusTagType(currentImage.value?.status)
-})
+  return getImageStatusTagType(currentImage.value?.status);
+});
 
 const loadingStatusText = computed(() => {
-  const status = normalizeImageStatus(currentImage.value?.status)
+  const status = normalizeImageStatus(currentImage.value?.status);
 
   if (status === 'queued' || status === 'pending') {
-    return 'Task queued, waiting for server push...'
+    return 'Task queued, waiting for server push...';
   }
 
   if (status === 'generating') {
-    return 'Image is generating, waiting for worker update...'
+    return 'Image is generating, waiting for worker update...';
   }
 
-  return 'Waiting for task update from server...'
-})
+  return 'Waiting for task update from server...';
+});
 
-const currentTaskCanCancel = computed(() => canCancelImageTask(currentImage.value?.status))
+const currentTaskCanCancel = computed(() => canCancelImageTask(currentImage.value?.status));
 
 const canDownloadCurrentImage = computed(() => {
   if (!canDownloadImageTask(currentImage.value?.status)) {
-    return false
+    return false;
   }
 
-  return Boolean(imageDataUrl.value || currentImage.value?.imageUrl)
-})
+  return Boolean(imageDataUrl.value || currentImage.value?.imageUrl);
+});
 
 const form = reactive({
   prompt: '',
@@ -258,283 +268,284 @@ const form = reactive({
   numSteps: 8,
   width: 768,
   height: 768,
-  seed: null
-})
+  seed: null,
+});
 
 const rules = {
   prompt: [
     { required: true, message: 'Please input prompt', trigger: 'blur' },
-    { min: 3, message: 'Prompt must be at least 3 chars', trigger: 'blur' }
+    { min: 3, message: 'Prompt must be at least 3 chars', trigger: 'blur' },
   ],
-  numSteps: [
-    { required: true, message: 'Please input steps', trigger: 'blur' }
-  ],
-  width: [
-    { required: true, message: 'Please input width', trigger: 'blur' }
-  ],
-  height: [
-    { required: true, message: 'Please input height', trigger: 'blur' }
-  ]
-}
+  numSteps: [{ required: true, message: 'Please input steps', trigger: 'blur' }],
+  width: [{ required: true, message: 'Please input width', trigger: 'blur' }],
+  height: [{ required: true, message: 'Please input height', trigger: 'blur' }],
+};
 
-const isHttpUrl = (url) => typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'))
+const isHttpUrl = (url) =>
+  typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'));
 
 const imageDataUrl = computed(() => {
-  const rawBase64 = currentImage.value?.imageBase64
+  const rawBase64 = currentImage.value?.imageBase64;
   if (rawBase64 && typeof rawBase64 === 'string') {
-    const trimmed = rawBase64.replace(/\s/g, '')
+    const trimmed = rawBase64.replace(/\s/g, '');
     if (trimmed) {
-      return `data:image/png;base64,${trimmed}`
+      return `data:image/png;base64,${trimmed}`;
     }
   }
 
-  const imageUrl = currentImage.value?.imageUrl
+  const imageUrl = currentImage.value?.imageUrl;
   if (isHttpUrl(imageUrl)) {
-    return imageUrl
+    return imageUrl;
   }
 
   if (binaryImageUrl.value) {
-    return binaryImageUrl.value
+    return binaryImageUrl.value;
   }
 
-  return ''
-})
+  return '';
+});
 
 const revokeBinaryImageUrl = () => {
   if (binaryImageUrl.value && binaryImageUrl.value.startsWith('blob:')) {
-    URL.revokeObjectURL(binaryImageUrl.value)
+    URL.revokeObjectURL(binaryImageUrl.value);
   }
-  binaryImageUrl.value = ''
-}
+  binaryImageUrl.value = '';
+};
 
 const clearTaskTimeout = () => {
   if (taskTimeoutId) {
-    window.clearTimeout(taskTimeoutId)
-    taskTimeoutId = 0
+    window.clearTimeout(taskTimeoutId);
+    taskTimeoutId = 0;
   }
-}
+};
 
 const clearTaskPolling = () => {
   if (taskPollTimer) {
-    window.clearTimeout(taskPollTimer)
-    taskPollTimer = 0
+    window.clearTimeout(taskPollTimer);
+    taskPollTimer = 0;
   }
-}
+};
 
 const clearTaskWaiter = ({ rejectPending = true } = {}) => {
-  clearTaskTimeout()
-  clearTaskPolling()
-  const reject = rejectPending ? taskReject : null
-  taskResolve = null
-  taskReject = null
+  clearTaskTimeout();
+  clearTaskPolling();
+  const reject = rejectPending ? taskReject : null;
+  taskResolve = null;
+  taskReject = null;
   if (reject) {
-    reject(new Error('superseded'))
+    reject(new Error('superseded'));
   }
-}
+};
 
 const resolveTaskWaiter = (task) => {
   if (!taskResolve) {
-    return
+    return;
   }
 
-  const resolve = taskResolve
-  clearTaskWaiter({ rejectPending: false })
-  resolve(task)
-}
+  const resolve = taskResolve;
+  clearTaskWaiter({ rejectPending: false });
+  resolve(task);
+};
 
 const rejectTaskWaiter = (error) => {
   if (!taskReject) {
-    return
+    return;
   }
 
-  const reject = taskReject
-  clearTaskWaiter({ rejectPending: false })
-  reject(error)
-}
+  const reject = taskReject;
+  clearTaskWaiter({ rejectPending: false });
+  reject(error);
+};
 
 const stopProgressAnimation = () => {
   if (progressTimer) {
-    window.clearInterval(progressTimer)
-    progressTimer = 0
+    window.clearInterval(progressTimer);
+    progressTimer = 0;
   }
-}
+};
 
 const syncProgressFromStatus = (status) => {
-  const normalized = normalizeImageStatus(status)
+  const normalized = normalizeImageStatus(status);
   if (normalized === 'queued' || normalized === 'pending') {
-    progress.value = Math.max(progress.value, 15)
-    return
+    progress.value = Math.max(progress.value, 15);
+    return;
   }
 
   if (normalized === 'generating') {
-    progress.value = Math.max(progress.value, 70)
-    return
+    progress.value = Math.max(progress.value, 70);
+    return;
   }
 
   if (isImageTerminalStatus(normalized)) {
-    progress.value = 100
+    progress.value = 100;
   }
-}
+};
 
 const startProgressAnimation = () => {
-  stopProgressAnimation()
+  stopProgressAnimation();
 
   progressTimer = window.setInterval(() => {
     if (!loading.value) {
-      return
+      return;
     }
 
-    const status = normalizeImageStatus(currentImage.value?.status)
-    const cap = status === 'generating' ? 92 : 45
-    progress.value = Math.min(cap, progress.value + 1)
-  }, 800)
-}
+    const status = normalizeImageStatus(currentImage.value?.status);
+    const cap = status === 'generating' ? 92 : 45;
+    progress.value = Math.min(cap, progress.value + 1);
+  }, 800);
+};
 
 const resetBinaryPreview = () => {
-  activeBinaryToken += 1
-  imageBinaryLoading.value = false
-  revokeBinaryImageUrl()
-}
+  activeBinaryToken += 1;
+  imageBinaryLoading.value = false;
+  revokeBinaryImageUrl();
+};
 
 const loadBinaryPreview = async (image) => {
-  if (!image?.id || !image?.imageUrl || image?.imageBase64 || normalizeImageStatus(image?.status) !== 'success') {
-    return
+  if (
+    !image?.id ||
+    !image?.imageUrl ||
+    image?.imageBase64 ||
+    normalizeImageStatus(image?.status) !== 'success'
+  ) {
+    return;
   }
 
   if (isHttpUrl(image.imageUrl)) {
-    return
+    return;
   }
 
-  const binaryToken = ++activeBinaryToken
-  imageBinaryLoading.value = true
+  const binaryToken = ++activeBinaryToken;
+  imageBinaryLoading.value = true;
 
   try {
-    const response = await imageApi.getImageBinary(image.id)
+    const response = await imageApi.getImageBinary(image.id);
     if (binaryToken !== activeBinaryToken) {
-      return
+      return;
     }
 
-    const blob = response?.data
+    const blob = response?.data;
     if (!(blob instanceof Blob)) {
-      throw new Error('invalid image binary response')
+      throw new Error('invalid image binary response');
     }
 
-    revokeBinaryImageUrl()
-    binaryImageUrl.value = URL.createObjectURL(blob)
+    revokeBinaryImageUrl();
+    binaryImageUrl.value = URL.createObjectURL(blob);
   } finally {
     if (binaryToken === activeBinaryToken) {
-      imageBinaryLoading.value = false
+      imageBinaryLoading.value = false;
     }
   }
-}
+};
 
 const applyTaskUpdate = (task) => {
   currentImage.value = {
     ...(currentImage.value || {}),
-    ...(task || {})
-  }
-  imageStore.setCurrentImage(currentImage.value)
-  syncProgressFromStatus(currentImage.value?.status)
-  return currentImage.value
-}
+    ...(task || {}),
+  };
+  imageStore.setCurrentImage(currentImage.value);
+  syncProgressFromStatus(currentImage.value?.status);
+  return currentImage.value;
+};
 
 const checkHealth = async () => {
   try {
-    const response = await imageApi.checkHealth()
-    const rawStatus = normalizeImageStatus(response?.data?.status)
-    healthStatus.value = ['healthy', 'ok', 'success'].includes(rawStatus) ? 'healthy' : 'unhealthy'
+    const response = await imageApi.checkHealth();
+    const rawStatus = normalizeImageStatus(response?.data?.status);
+    healthStatus.value = ['healthy', 'ok', 'success'].includes(rawStatus) ? 'healthy' : 'unhealthy';
   } catch (error) {
-    healthStatus.value = 'unhealthy'
+    healthStatus.value = 'unhealthy';
   }
-}
+};
 
-const waitForTaskCompletion = (taskToken) => new Promise((resolve, reject) => {
-  taskResolve = resolve
-  taskReject = reject
-  clearTaskTimeout()
-  taskTimeoutId = window.setTimeout(() => {
-    if (taskToken !== activeTaskToken) {
-      return
-    }
+const waitForTaskCompletion = (taskToken) =>
+  new Promise((resolve, reject) => {
+    taskResolve = resolve;
+    taskReject = reject;
+    clearTaskTimeout();
+    taskTimeoutId = window.setTimeout(() => {
+      if (taskToken !== activeTaskToken) {
+        return;
+      }
 
-    rejectTaskWaiter(new Error('generation timeout, please check history later'))
-  }, POLL_TIMEOUT_MS)
-})
+      rejectTaskWaiter(new Error('generation timeout, please check history later'));
+    }, POLL_TIMEOUT_MS);
+  });
 
 const scheduleTaskStatusPoll = (taskId, taskToken) => {
-  clearTaskPolling()
+  clearTaskPolling();
 
   taskPollTimer = window.setTimeout(async () => {
     if (taskToken !== activeTaskToken || !loading.value || currentImage.value?.id !== taskId) {
-      return
+      return;
     }
 
     try {
-      const response = await imageApi.getImageStatus(taskId)
+      const response = await imageApi.getImageStatus(taskId);
       if (taskToken !== activeTaskToken || currentImage.value?.id !== taskId) {
-        return
+        return;
       }
 
-      const latest = applyTaskUpdate(response?.data || {})
+      const latest = applyTaskUpdate(response?.data || {});
       if (isImageTerminalStatus(latest.status)) {
-        stopProgressAnimation()
-        resolveTaskWaiter(latest)
-        return
+        stopProgressAnimation();
+        resolveTaskWaiter(latest);
+        return;
       }
     } catch (error) {
-      console.error('Task status poll failed:', error)
+      console.error('Task status poll failed:', error);
     }
 
     if (taskToken === activeTaskToken && loading.value && currentImage.value?.id === taskId) {
-      scheduleTaskStatusPoll(taskId, taskToken)
+      scheduleTaskStatusPoll(taskId, taskToken);
     }
-  }, TASK_POLL_INTERVAL_MS)
-}
+  }, TASK_POLL_INTERVAL_MS);
+};
 
 const handleTaskSocketEvent = (event) => {
   if (event?.type !== 'image.task.updated') {
-    return
+    return;
   }
 
-  const task = event.task || {}
+  const task = event.task || {};
   if (!task.id) {
-    return
+    return;
   }
 
   if (currentImage.value?.id !== task.id) {
-    return
+    return;
   }
 
-  const latest = applyTaskUpdate(task)
-  const status = normalizeImageStatus(latest.status)
+  const latest = applyTaskUpdate(task);
+  const status = normalizeImageStatus(latest.status);
   if (!isImageTerminalStatus(status)) {
-    return
+    return;
   }
 
-  stopProgressAnimation()
-  resolveTaskWaiter(latest)
-}
+  stopProgressAnimation();
+  resolveTaskWaiter(latest);
+};
 
 const handleGenerate = async () => {
-  const taskToken = ++activeTaskToken
+  const taskToken = ++activeTaskToken;
 
   try {
-    await formRef.value.validate()
-    loading.value = true
-    cancelling.value = false
-    progress.value = 10
-    currentImage.value = null
-    imageStore.setCurrentImage(null)
-    resetBinaryPreview()
-    clearTaskWaiter()
-    startProgressAnimation()
+    await formRef.value.validate();
+    loading.value = true;
+    cancelling.value = false;
+    progress.value = 10;
+    currentImage.value = null;
+    imageStore.setCurrentImage(null);
+    resetBinaryPreview();
+    clearTaskWaiter();
+    startProgressAnimation();
 
-    const submitResponse = await imageApi.generateImage(form)
-    const queuedTask = submitResponse?.data || {}
-    const imageId = queuedTask.id
+    const submitResponse = await imageApi.generateImage(form);
+    const queuedTask = submitResponse?.data || {};
+    const imageId = queuedTask.id;
 
     if (!imageId) {
-      throw new Error('missing queued task id from backend')
+      throw new Error('missing queued task id from backend');
     }
 
     applyTaskUpdate({
@@ -544,196 +555,201 @@ const handleGenerate = async () => {
       numSteps: form.numSteps,
       width: form.width,
       height: form.height,
-      seed: form.seed
-    })
+      seed: form.seed,
+    });
 
-    const initialStatus = normalizeImageStatus(currentImage.value?.status)
+    const initialStatus = normalizeImageStatus(currentImage.value?.status);
     const completionPromise = isImageTerminalStatus(initialStatus)
       ? Promise.resolve(currentImage.value)
-      : waitForTaskCompletion(taskToken)
+      : waitForTaskCompletion(taskToken);
 
     if (!isImageTerminalStatus(initialStatus)) {
-      scheduleTaskStatusPoll(imageId, taskToken)
+      scheduleTaskStatusPoll(imageId, taskToken);
     }
 
-    const finalImage = await completionPromise
+    const finalImage = await completionPromise;
     if (taskToken !== activeTaskToken) {
-      return
+      return;
     }
 
-    stopProgressAnimation()
-    progress.value = 100
-    imageStore.setCurrentImage(finalImage)
-    currentImage.value = finalImage
+    stopProgressAnimation();
+    progress.value = 100;
+    imageStore.setCurrentImage(finalImage);
+    currentImage.value = finalImage;
 
-    const finalStatus = normalizeImageStatus(finalImage.status)
+    const finalStatus = normalizeImageStatus(finalImage.status);
     if (finalStatus === 'success') {
-      imageStore.addToHistory(finalImage)
-      ElMessage.success('Image generated successfully')
-      return
+      imageStore.addToHistory(finalImage);
+      ElMessage.success('Image generated successfully');
+      return;
     }
 
     if (finalStatus === 'cancelled') {
-      ElMessage.warning('Task cancelled')
-      return
+      ElMessage.warning('Task cancelled');
+      return;
     }
 
     if (finalStatus === 'timeout') {
-      ElMessage.error(finalImage.errorMessage || 'Image generation timed out')
-      return
+      ElMessage.error(finalImage.errorMessage || 'Image generation timed out');
+      return;
     }
 
-    throw new Error(finalImage.errorMessage || 'image generation failed')
+    throw new Error(finalImage.errorMessage || 'image generation failed');
   } catch (error) {
     if (taskToken !== activeTaskToken) {
-      return
+      return;
     }
 
     if (!loading.value) {
-      return
+      return;
     }
 
-    clearTaskWaiter()
-    stopProgressAnimation()
-    progress.value = 0
-    ElMessage.error('Generation failed: ' + (error?.message || 'unknown error'))
+    clearTaskWaiter();
+    stopProgressAnimation();
+    progress.value = 0;
+    ElMessage.error('Generation failed: ' + (error?.message || 'unknown error'));
   } finally {
     if (taskToken === activeTaskToken) {
-      loading.value = false
-      cancelling.value = false
+      loading.value = false;
+      cancelling.value = false;
     }
   }
-}
+};
 
 const handleCancelCurrentTask = async () => {
   if (!currentTaskCanCancel.value || cancelling.value || !currentImage.value?.id) {
-    return
+    return;
   }
 
-  cancelling.value = true
+  cancelling.value = true;
 
   try {
-    const response = await imageApi.cancelImage(currentImage.value.id)
-    stopProgressAnimation()
-    loading.value = false
-    progress.value = 100
-    const latest = applyTaskUpdate(response?.data || {})
-    resolveTaskWaiter(latest)
-    ElMessage.warning('Task cancelled')
+    const response = await imageApi.cancelImage(currentImage.value.id);
+    stopProgressAnimation();
+    loading.value = false;
+    progress.value = 100;
+    const latest = applyTaskUpdate(response?.data || {});
+    resolveTaskWaiter(latest);
+    ElMessage.warning('Task cancelled');
   } catch (error) {
-    console.error('Cancel task failed:', error)
+    console.error('Cancel task failed:', error);
   } finally {
-    cancelling.value = false
+    cancelling.value = false;
   }
-}
+};
 
 const handleReset = () => {
-  activeTaskToken += 1
-  loading.value = false
-  cancelling.value = false
-  progress.value = 0
-  currentImage.value = null
-  clearTaskWaiter()
-  stopProgressAnimation()
-  resetBinaryPreview()
-  imageStore.setCurrentImage(null)
-  formRef.value?.resetFields()
-}
+  activeTaskToken += 1;
+  loading.value = false;
+  cancelling.value = false;
+  progress.value = 0;
+  currentImage.value = null;
+  clearTaskWaiter();
+  stopProgressAnimation();
+  resetBinaryPreview();
+  imageStore.setCurrentImage(null);
+  formRef.value?.resetFields();
+};
 
 const handleDownload = async () => {
   try {
     if (!currentImage.value) {
-      ElMessage.warning('No image data available yet')
-      return
+      ElMessage.warning('No image data available yet');
+      return;
     }
 
-    const url = imageDataUrl.value
+    const url = imageDataUrl.value;
 
     // For local URLs (data: or blob:), download directly
     if (url && !isHttpUrl(url)) {
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `generated_${currentImage.value.requestId || Date.now()}.png`
-      link.click()
-      ElMessage.success('Download started')
-      return
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `generated_${currentImage.value.requestId || Date.now()}.png`;
+      link.click();
+      ElMessage.success('Download started');
+      return;
     }
 
     // For HTTP URLs or no URL, fetch via binary endpoint for proper download
     if (!currentImage.value.id) {
-      ElMessage.warning('No image data available yet')
-      return
+      ElMessage.warning('No image data available yet');
+      return;
     }
 
-    const response = await imageApi.getImageBinary(currentImage.value.id)
-    const blob = response?.data
+    const response = await imageApi.getImageBinary(currentImage.value.id);
+    const blob = response?.data;
     if (!(blob instanceof Blob)) {
-      throw new Error('invalid image binary response')
+      throw new Error('invalid image binary response');
     }
 
-    const blobUrl = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = blobUrl
-    link.download = `generated_${currentImage.value.requestId || Date.now()}.png`
-    link.click()
-    URL.revokeObjectURL(blobUrl)
-    ElMessage.success('Download started')
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = `generated_${currentImage.value.requestId || Date.now()}.png`;
+    link.click();
+    URL.revokeObjectURL(blobUrl);
+    ElMessage.success('Download started');
   } catch (error) {
-    ElMessage.error(error?.message || 'Download failed')
+    ElMessage.error(error?.message || 'Download failed');
   }
-}
+};
 
 const handleCopyPrompt = () => {
-  const prompt = currentImage.value?.prompt || form.prompt
+  const prompt = currentImage.value?.prompt || form.prompt;
   if (!prompt) {
-    return
+    return;
   }
 
-  navigator.clipboard.writeText(prompt)
-  ElMessage.success('Prompt copied')
-}
+  navigator.clipboard.writeText(prompt);
+  ElMessage.success('Prompt copied');
+};
 
 onMounted(() => {
-  checkHealth()
-  socketUnsubscribe = subscribeTaskEvents(handleTaskSocketEvent)
-})
+  checkHealth();
+  socketUnsubscribe = subscribeTaskEvents(handleTaskSocketEvent);
+});
 
 watch(
   () => ({
     id: currentImage.value?.id,
     status: currentImage.value?.status,
     imageUrl: currentImage.value?.imageUrl,
-    imageBase64: currentImage.value?.imageBase64
+    imageBase64: currentImage.value?.imageBase64,
   }),
   async (next, previous) => {
     if (next.id !== previous?.id || next.imageBase64) {
-      resetBinaryPreview()
+      resetBinaryPreview();
     }
 
-    if (!next.id || !next.imageUrl || next.imageBase64 || normalizeImageStatus(next.status) !== 'success') {
-      return
+    if (
+      !next.id ||
+      !next.imageUrl ||
+      next.imageBase64 ||
+      normalizeImageStatus(next.status) !== 'success'
+    ) {
+      return;
     }
 
     if (isHttpUrl(next.imageUrl)) {
-      return
+      return;
     }
 
     try {
-      await loadBinaryPreview(currentImage.value)
+      await loadBinaryPreview(currentImage.value);
     } catch (error) {
-      console.error('Failed to load protected image preview:', error)
+      console.error('Failed to load protected image preview:', error);
     }
   }
-)
+);
 
 onBeforeUnmount(() => {
-  activeTaskToken += 1
-  clearTaskWaiter()
-  stopProgressAnimation()
-  socketUnsubscribe?.()
-  socketUnsubscribe = null
-  resetBinaryPreview()
-})
+  activeTaskToken += 1;
+  clearTaskWaiter();
+  stopProgressAnimation();
+  socketUnsubscribe?.();
+  socketUnsubscribe = null;
+  resetBinaryPreview();
+});
 </script>
 
 <style scoped>

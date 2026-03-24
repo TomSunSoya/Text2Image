@@ -19,7 +19,7 @@ struct LoginResult {
 };
 
 class AuthService {
-public:
+  public:
     std::expected<RegisterResult, ServiceError> registerUser(const nlohmann::json& payload) const;
     std::expected<LoginResult, ServiceError> login(const nlohmann::json& payload) const;
 };

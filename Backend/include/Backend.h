@@ -12,4 +12,4 @@ nlohmann::json loadConfig(const std::string& path = "config.json");
 /// repeated file I/O and JSON parsing on every request.
 const nlohmann::json& cachedConfig();
 
-}
+} // namespace backend

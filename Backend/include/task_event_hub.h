@@ -10,14 +10,14 @@
 #include "image_generation.h"
 
 class TaskEventHub {
-public:
+  public:
     static TaskEventHub& instance();
 
     void subscribe(int64_t userId, const drogon::WebSocketConnectionPtr& connection);
     void unsubscribe(const drogon::WebSocketConnectionPtr& connection);
     void publishTaskUpdated(const models::ImageGeneration& generation);
 
-private:
+  private:
     using ConnectionKey = drogon::WebSocketConnection*;
     using ConnectionMap = std::unordered_map<ConnectionKey, drogon::WebSocketConnectionPtr>;
 

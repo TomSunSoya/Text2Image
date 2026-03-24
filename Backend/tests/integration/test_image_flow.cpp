@@ -8,15 +8,12 @@
 
 namespace {
 
-int64_t createTestUser(const std::string& username)
-{
+int64_t createTestUser(const std::string& username) {
     AuthService auth;
-    auto result = auth.registerUser({
-        {"username", username},
-        {"email",    username + "@test.com"},
-        {"password", "pass123456"},
-        {"nickname", username}
-    });
+    auto result = auth.registerUser({{"username", username},
+                                     {"email", username + "@test.com"},
+                                     {"password", "pass123456"},
+                                     {"nickname", username}});
     if (!result.has_value()) {
         throw std::runtime_error(result.error().message);
     }
@@ -26,26 +23,23 @@ int64_t createTestUser(const std::string& username)
 } // namespace
 
 class ImageFlowTest : public ::testing::Test {
-protected:
+  protected:
     int64_t userId_ = 0;
 
-    void SetUp() override
-    {
+    void SetUp() override {
         test_support::ensureTestDatabase();
         test_support::cleanTables();
         userId_ = createTestUser("imguser");
     }
 
-    void TearDown() override
-    {
+    void TearDown() override {
         test_support::cleanTables();
     }
 };
 
 // ==================== create ====================
 
-TEST_F(ImageFlowTest, CreateReturnsQueued)
-{
+TEST_F(ImageFlowTest, CreateReturnsQueued) {
     ImageService service;
     auto result = service.create(userId_, {{"prompt", "a dog"}});
     ASSERT_TRUE(result.has_value());
@@ -54,17 +48,11 @@ TEST_F(ImageFlowTest, CreateReturnsQueued)
     EXPECT_FALSE(result->generation.request_id.empty());
 }
 
-TEST_F(ImageFlowTest, CreateWithAllParameters)
-{
+TEST_F(ImageFlowTest, CreateWithAllParameters) {
     ImageService service;
-    nlohmann::json payload = {
-        {"prompt",          "a cat"},
-        {"negative_prompt", "blurry"},
-        {"num_steps",       20},
-        {"height",          512},
-        {"width",           512},
-        {"seed",            42}
-    };
+    nlohmann::json payload = {{"prompt", "a cat"}, {"negative_prompt", "blurry"},
+                              {"num_steps", 20},   {"height", 512},
+                              {"width", 512},      {"seed", 42}};
     auto result = service.create(userId_, payload);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->generation.prompt, "a cat");
@@ -72,36 +60,32 @@ TEST_F(ImageFlowTest, CreateWithAllParameters)
     EXPECT_EQ(result->generation.num_steps, 20);
 }
 
-TEST_F(ImageFlowTest, CreateEmptyPromptFails)
-{
+TEST_F(ImageFlowTest, CreateEmptyPromptFails) {
     ImageService service;
     auto result = service.create(userId_, {{"prompt", "   "}});
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, "prompt_required");
 }
 
-TEST_F(ImageFlowTest, CreateTooShortPromptFails)
-{
+TEST_F(ImageFlowTest, CreateTooShortPromptFails) {
     ImageService service;
     auto result = service.create(userId_, {{"prompt", "ab"}});
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, "invalid_prompt_length");
 }
 
-TEST_F(ImageFlowTest, CreateUnauthorizedFails)
-{
+TEST_F(ImageFlowTest, CreateUnauthorizedFails) {
     ImageService service;
     auto result = service.create(0, {{"prompt", "test"}});
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, "unauthorized");
 }
 
-TEST_F(ImageFlowTest, IdempotentCreate)
-{
+TEST_F(ImageFlowTest, IdempotentCreate) {
     ImageService service;
     nlohmann::json payload = {{"prompt", "cat"}, {"request_id", "dedup-001"}};
 
-    auto first  = service.create(userId_, payload);
+    auto first = service.create(userId_, payload);
     auto second = service.create(userId_, payload);
 
     ASSERT_TRUE(first.has_value());
@@ -111,8 +95,7 @@ TEST_F(ImageFlowTest, IdempotentCreate)
 
 // ==================== list ====================
 
-TEST_F(ImageFlowTest, ListMyReturnsCreatedTasks)
-{
+TEST_F(ImageFlowTest, ListMyReturnsCreatedTasks) {
     ImageService service;
     (void)service.create(userId_, {{"prompt", "cat"}});
     (void)service.create(userId_, {{"prompt", "dog"}});
@@ -123,8 +106,7 @@ TEST_F(ImageFlowTest, ListMyReturnsCreatedTasks)
     EXPECT_EQ(list->content.size(), 2u);
 }
 
-TEST_F(ImageFlowTest, ListMyPagination)
-{
+TEST_F(ImageFlowTest, ListMyPagination) {
     ImageService service;
     for (int i = 0; i < 5; ++i) {
         (void)service.create(userId_, {{"prompt", "task " + std::to_string(i)}});
@@ -140,8 +122,7 @@ TEST_F(ImageFlowTest, ListMyPagination)
     EXPECT_EQ(page1->content.size(), 2u);
 }
 
-TEST_F(ImageFlowTest, ListMyByStatus)
-{
+TEST_F(ImageFlowTest, ListMyByStatus) {
     ImageService service;
     (void)service.create(userId_, {{"prompt", "ant"}});
     (void)service.create(userId_, {{"prompt", "bee"}});
@@ -151,8 +132,7 @@ TEST_F(ImageFlowTest, ListMyByStatus)
     EXPECT_EQ(queued->total_elements, 2);
 }
 
-TEST_F(ImageFlowTest, ListMyEmptyResult)
-{
+TEST_F(ImageFlowTest, ListMyEmptyResult) {
     ImageService service;
     auto list = service.listMy(userId_, 0, 10);
     ASSERT_TRUE(list.has_value());
@@ -162,8 +142,7 @@ TEST_F(ImageFlowTest, ListMyEmptyResult)
 
 // ==================== getById ====================
 
-TEST_F(ImageFlowTest, GetByIdSuccess)
-{
+TEST_F(ImageFlowTest, GetByIdSuccess) {
     ImageService service;
     auto created = service.create(userId_, {{"prompt", "hello"}});
     ASSERT_TRUE(created.has_value());
@@ -174,16 +153,14 @@ TEST_F(ImageFlowTest, GetByIdSuccess)
     EXPECT_EQ(fetched->generation.status, "queued");
 }
 
-TEST_F(ImageFlowTest, GetByIdNotFound)
-{
+TEST_F(ImageFlowTest, GetByIdNotFound) {
     ImageService service;
     auto result = service.getById(userId_, 999999, false);
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, "image_not_found");
 }
 
-TEST_F(ImageFlowTest, OtherUserCannotAccessMyTask)
-{
+TEST_F(ImageFlowTest, OtherUserCannotAccessMyTask) {
     ImageService service;
     auto created = service.create(userId_, {{"prompt", "private"}});
     ASSERT_TRUE(created.has_value());
@@ -196,8 +173,7 @@ TEST_F(ImageFlowTest, OtherUserCannotAccessMyTask)
 
 // ==================== cancel ====================
 
-TEST_F(ImageFlowTest, CancelQueuedTaskSucceeds)
-{
+TEST_F(ImageFlowTest, CancelQueuedTaskSucceeds) {
     ImageService service;
     auto created = service.create(userId_, {{"prompt", "test"}});
     ASSERT_TRUE(created.has_value());
@@ -207,11 +183,10 @@ TEST_F(ImageFlowTest, CancelQueuedTaskSucceeds)
     EXPECT_EQ(cancelled->generation.status, "cancelled");
 }
 
-TEST_F(ImageFlowTest, CancelAlreadyCancelledFails)
-{
+TEST_F(ImageFlowTest, CancelAlreadyCancelledFails) {
     ImageService service;
     auto created = service.create(userId_, {{"prompt", "test"}});
-    auto taskId  = created->generation.id;
+    auto taskId = created->generation.id;
 
     ASSERT_TRUE(service.cancelById(userId_, taskId).has_value());
 
@@ -220,8 +195,7 @@ TEST_F(ImageFlowTest, CancelAlreadyCancelledFails)
     EXPECT_EQ(again.error().code, "task_cancel_not_allowed");
 }
 
-TEST_F(ImageFlowTest, CancelNonexistentTaskFails)
-{
+TEST_F(ImageFlowTest, CancelNonexistentTaskFails) {
     ImageService service;
     auto result = service.cancelById(userId_, 999999);
     ASSERT_FALSE(result.has_value());
@@ -230,11 +204,10 @@ TEST_F(ImageFlowTest, CancelNonexistentTaskFails)
 
 // ==================== retry ====================
 
-TEST_F(ImageFlowTest, RetryCancelledTaskSucceeds)
-{
+TEST_F(ImageFlowTest, RetryCancelledTaskSucceeds) {
     ImageService service;
     auto created = service.create(userId_, {{"prompt", "test"}});
-    auto taskId  = created->generation.id;
+    auto taskId = created->generation.id;
 
     ASSERT_TRUE(service.cancelById(userId_, taskId).has_value());
 
@@ -243,8 +216,7 @@ TEST_F(ImageFlowTest, RetryCancelledTaskSucceeds)
     EXPECT_EQ(retried->generation.status, "queued");
 }
 
-TEST_F(ImageFlowTest, RetryQueuedTaskFails)
-{
+TEST_F(ImageFlowTest, RetryQueuedTaskFails) {
     ImageService service;
     auto created = service.create(userId_, {{"prompt", "test"}});
 
@@ -255,11 +227,10 @@ TEST_F(ImageFlowTest, RetryQueuedTaskFails)
 
 // ==================== delete ====================
 
-TEST_F(ImageFlowTest, DeleteCancelledTask)
-{
+TEST_F(ImageFlowTest, DeleteCancelledTask) {
     ImageService service;
     auto created = service.create(userId_, {{"prompt", "test"}});
-    auto taskId  = created->generation.id;
+    auto taskId = created->generation.id;
 
     ASSERT_TRUE(service.cancelById(userId_, taskId).has_value());
 
@@ -271,8 +242,7 @@ TEST_F(ImageFlowTest, DeleteCancelledTask)
     EXPECT_FALSE(fetched.has_value());
 }
 
-TEST_F(ImageFlowTest, DeleteNonexistentFails)
-{
+TEST_F(ImageFlowTest, DeleteNonexistentFails) {
     ImageService service;
     auto result = service.deleteById(userId_, 999999);
     ASSERT_FALSE(result.has_value());

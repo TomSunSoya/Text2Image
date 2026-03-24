@@ -12,8 +12,7 @@
 
 namespace {
 
-std::string describeResponse(const minio::s3::Response& response)
-{
+std::string describeResponse(const minio::s3::Response& response) {
     if (const auto err = response.Error()) {
         return err.String();
     }
@@ -46,7 +45,8 @@ struct ClientBundle {
               }
 
               if (!parsed.path.empty() && parsed.path != "/") {
-                  throw std::runtime_error("MinIO endpoint must not include a path: " + config.endpoint);
+                  throw std::runtime_error("MinIO endpoint must not include a path: " +
+                                           config.endpoint);
               }
 
               minio::s3::BaseUrl value(parsed.host, parsed.https, config.region);
@@ -56,25 +56,23 @@ struct ClientBundle {
               value.virtual_style = false;
               return value;
           }()),
-          provider([&config] {
-                       if (config.access_key.empty()) {
-                           throw std::runtime_error("MinIO access key is empty");
-                       }
-                       return config.access_key;
-                   }(),
-                   [&config] {
-                       if (config.secret_key.empty()) {
-                           throw std::runtime_error("MinIO secret key is empty");
-                       }
-                       return config.secret_key;
-                   }()),
-          client(base_url, &provider)
-    {
-    }
+          provider(
+              [&config] {
+                  if (config.access_key.empty()) {
+                      throw std::runtime_error("MinIO access key is empty");
+                  }
+                  return config.access_key;
+              }(),
+              [&config] {
+                  if (config.secret_key.empty()) {
+                      throw std::runtime_error("MinIO secret key is empty");
+                  }
+                  return config.secret_key;
+              }()),
+          client(base_url, &provider) {}
 };
 
-ClientBundle createClient(const MinioClient::Config& config)
-{
+ClientBundle createClient(const MinioClient::Config& config) {
     if (config.bucket.empty()) {
         throw std::runtime_error("MinIO bucket is empty");
     }
@@ -84,17 +82,14 @@ ClientBundle createClient(const MinioClient::Config& config)
 
 } // namespace
 
-MinioClient::MinioClient(Config config)
-    : config_(std::move(config))
-{
+MinioClient::MinioClient(Config config) : config_(std::move(config)) {
     while (!config_.endpoint.empty() && config_.endpoint.back() == '/') {
         config_.endpoint.pop_back();
     }
 }
 
 bool MinioClient::putObject(const std::string& key, const std::string& data,
-                            const std::string& contentType) const
-{
+                            const std::string& contentType) const {
     auto bundle = createClient(config_);
 
     minio::s3::PutObjectApiArgs args;
@@ -106,16 +101,15 @@ bool MinioClient::putObject(const std::string& key, const std::string& data,
 
     auto response = static_cast<minio::s3::BaseClient&>(bundle.client).PutObject(args);
     if (!response) {
-        spdlog::error("MinioClient::putObject failed, key={}, reason={}",
-                      key, describeResponse(response));
+        spdlog::error("MinioClient::putObject failed, key={}, reason={}", key,
+                      describeResponse(response));
         return false;
     }
 
     return true;
 }
 
-bool MinioClient::deleteObject(const std::string& key) const
-{
+bool MinioClient::deleteObject(const std::string& key) const {
     auto bundle = createClient(config_);
 
     minio::s3::RemoveObjectArgs args;
@@ -124,16 +118,15 @@ bool MinioClient::deleteObject(const std::string& key) const
 
     auto response = bundle.client.RemoveObject(args);
     if (!response) {
-        spdlog::error("MinioClient::deleteObject failed, key={}, reason={}",
-                      key, describeResponse(response));
+        spdlog::error("MinioClient::deleteObject failed, key={}, reason={}", key,
+                      describeResponse(response));
         return false;
     }
 
     return true;
 }
 
-std::optional<std::string> MinioClient::getObject(const std::string& key) const
-{
+std::optional<std::string> MinioClient::getObject(const std::string& key) const {
     auto bundle = createClient(config_);
 
     std::string body;
@@ -147,16 +140,15 @@ std::optional<std::string> MinioClient::getObject(const std::string& key) const
 
     auto response = bundle.client.GetObject(args);
     if (!response) {
-        spdlog::error("MinioClient::getObject failed, key={}, reason={}",
-                      key, describeResponse(response));
+        spdlog::error("MinioClient::getObject failed, key={}, reason={}", key,
+                      describeResponse(response));
         return std::nullopt;
     }
 
     return body;
 }
 
-std::string MinioClient::presignGetUrl(const std::string& key, int expirySeconds) const
-{
+std::string MinioClient::presignGetUrl(const std::string& key, int expirySeconds) const {
     auto bundle = createClient(config_);
 
     minio::s3::GetPresignedObjectUrlArgs args;
@@ -178,8 +170,7 @@ std::string MinioClient::presignGetUrl(const std::string& key, int expirySeconds
     return response.url;
 }
 
-bool MinioClient::ensureBucketExists() const
-{
+bool MinioClient::ensureBucketExists() const {
     auto bundle = createClient(config_);
 
     minio::s3::BucketExistsArgs existsArgs;

@@ -5,17 +5,11 @@
     "moduleResolution": "Bundler",
     "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "src/*"
-      ]
+      "@/*": ["src/*"]
     },
     "jsx": "preserve",
     "allowJs": true,
     "checkJs": false
   },
-  "include": [
-    "src/**/*.js",
-    "src/**/*.vue",
-    "vite.config.mjs"
-  ]
+  "include": ["src/**/*.js", "src/**/*.vue", "vite.config.mjs"]
 }

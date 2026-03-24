@@ -9,8 +9,7 @@
 
 namespace utils {
 
-std::string encodeToBase64(const std::string& bytes)
-{
+std::string encodeToBase64(const std::string& bytes) {
     if (bytes.empty()) {
         return {};
     }
@@ -20,10 +19,9 @@ std::string encodeToBase64(const std::string& bytes)
     }
 
     std::string base64((bytes.size() + 2) / 3 * 4, '\0');
-    const int outLen = EVP_EncodeBlock(
-        reinterpret_cast<unsigned char*>(&base64[0]),
-        reinterpret_cast<const unsigned char*>(bytes.data()),
-        static_cast<int>(bytes.size()));
+    const int outLen = EVP_EncodeBlock(reinterpret_cast<unsigned char*>(&base64[0]),
+                                       reinterpret_cast<const unsigned char*>(bytes.data()),
+                                       static_cast<int>(bytes.size()));
 
     if (outLen <= 0) {
         return {};
@@ -33,22 +31,17 @@ std::string encodeToBase64(const std::string& bytes)
     return base64;
 }
 
-std::string decodeBase64(const std::string& input)
-{
+std::string decodeBase64(const std::string& input) {
     std::string base64 = input;
-    base64.erase(
-        std::remove_if(base64.begin(), base64.end(), [](unsigned char c) {
-            return std::isspace(c);
-        }),
-        base64.end()
-    );
+    base64.erase(std::remove_if(base64.begin(), base64.end(),
+                                [](unsigned char c) { return std::isspace(c); }),
+                 base64.end());
 
     std::string out(base64.size() / 4 * 3, '\0');
 
-    const int decoded = EVP_DecodeBlock(
-        reinterpret_cast<unsigned char*>(&out[0]),
-        reinterpret_cast<const unsigned char*>(base64.data()),
-        static_cast<int>(base64.size()));
+    const int decoded = EVP_DecodeBlock(reinterpret_cast<unsigned char*>(&out[0]),
+                                        reinterpret_cast<const unsigned char*>(base64.data()),
+                                        static_cast<int>(base64.size()));
 
     if (decoded < 0) {
         throw std::runtime_error("invalid base64 payload");
@@ -64,4 +57,4 @@ std::string decodeBase64(const std::string& input)
     return out;
 }
 
-}
+} // namespace utils

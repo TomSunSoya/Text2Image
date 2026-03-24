@@ -4,7 +4,6 @@ from pathlib import Path
 import torch
 from diffusers import ZImagePipeline
 
-
 LOCAL_MODEL_PATH = os.getenv(
     "MODEL_PATH",
     "C:/Users/pc1/.cache/modelscope/hub/models/Tongyi-MAI/Z-Image-Turbo",

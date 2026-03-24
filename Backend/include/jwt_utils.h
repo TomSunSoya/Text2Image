@@ -17,4 +17,4 @@ std::string createToken(int64_t userId, const std::string& username);
 std::optional<JwtPayload> verifyToken(const std::string& token);
 std::optional<std::string> extractBearerToken(const drogon::HttpRequestPtr& req);
 
-}
+} // namespace utils

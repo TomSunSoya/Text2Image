@@ -26,15 +26,14 @@ namespace {
 using Clock = std::chrono::system_clock;
 
 struct TaskEngineConfig {
-    int workers{ 1 };
-    int poll_interval_ms{ 500 };
-    long lease_seconds{ 600 };
-	int max_retries{ 3 };
-    std::string worker_prefix{ "backend-worker" };
+    int workers{1};
+    int poll_interval_ms{500};
+    long lease_seconds{600};
+    int max_retries{3};
+    std::string worker_prefix{"backend-worker"};
 };
 
-TaskEngineConfig loadTaskEngineConfig()
-{
+TaskEngineConfig loadTaskEngineConfig() {
     TaskEngineConfig config;
 
     try {
@@ -42,31 +41,35 @@ TaskEngineConfig loadTaskEngineConfig()
         if (backendConfig.contains("task_engine") && backendConfig.at("task_engine").is_object()) {
             const auto& taskEngineConfig = backendConfig.at("task_engine");
             config.workers = (std::max)(0, taskEngineConfig.value("workers", config.workers));
-            config.poll_interval_ms = (std::max)(100, taskEngineConfig.value("poll_interval_ms", config.poll_interval_ms));
-            config.lease_seconds = (std::max)(30l, taskEngineConfig.value("lease_seconds", config.lease_seconds));
-            config.max_retries = (std::max)(0, taskEngineConfig.value("max_retries", config.max_retries));
+            config.poll_interval_ms =
+                (std::max)(100,
+                           taskEngineConfig.value("poll_interval_ms", config.poll_interval_ms));
+            config.lease_seconds =
+                (std::max)(30l, taskEngineConfig.value("lease_seconds", config.lease_seconds));
+            config.max_retries =
+                (std::max)(0, taskEngineConfig.value("max_retries", config.max_retries));
             config.worker_prefix = taskEngineConfig.value("worker_prefix", config.worker_prefix);
         }
     } catch (const std::exception& ex) {
-        spdlog::error("Failed to load task engine config, using defaults. Exception: {}", ex.what());
+        spdlog::error("Failed to load task engine config, using defaults. Exception: {}",
+                      ex.what());
     } catch (...) {
         spdlog::error("Failed to load task engine config, using defaults. Unknown exception.");
     }
     return config;
 }
 
-const TaskEngineConfig& taskEngineConfig()
-{
+const TaskEngineConfig& taskEngineConfig() {
     static const TaskEngineConfig config = loadTaskEngineConfig();
     return config;
 }
 
 std::vector<std::jthread>& taskWorkers() {
     static std::vector<std::jthread> workers;
-	return workers;
+    return workers;
 }
 
-std::once_flag &workerStartOnce() {
+std::once_flag& workerStartOnce() {
     static std::once_flag onceFlag;
     return onceFlag;
 }
@@ -87,21 +90,15 @@ void notifyWorkers() {
     taskNotifyCv().notify_one();
 }
 
-std::chrono::seconds leaseRenewInterval(long leaseSeconds)
-{
+std::chrono::seconds leaseRenewInterval(long leaseSeconds) {
     return std::chrono::seconds((std::max)(1l, leaseSeconds / 2));
 }
 
-std::jthread startLeaseKeeper(const models::ImageGeneration& task,
-                              const std::string& workerId,
-                              long leaseSeconds)
-{
+std::jthread startLeaseKeeper(const models::ImageGeneration& task, const std::string& workerId,
+                              long leaseSeconds) {
     const auto renewEvery = leaseRenewInterval(leaseSeconds);
 
-    return std::jthread([taskId = task.id,
-                         userId = task.user_id,
-                         workerId,
-                         leaseSeconds,
+    return std::jthread([taskId = task.id, userId = task.user_id, workerId, leaseSeconds,
                          renewEvery](std::stop_token stopToken) {
         ImageRepo repo;
         auto nextRenewal = std::chrono::steady_clock::now() + renewEvery;
@@ -124,10 +121,12 @@ std::jthread startLeaseKeeper(const models::ImageGeneration& task,
                     break;
                 }
             } catch (const std::exception& ex) {
-                spdlog::warn("lease keeper failed to renew lease id={}, user_id={}, worker_id={}, reason={}",
-                             taskId, userId, workerId, ex.what());
+                spdlog::warn(
+                    "lease keeper failed to renew lease id={}, user_id={}, worker_id={}, reason={}",
+                    taskId, userId, workerId, ex.what());
             } catch (...) {
-                spdlog::warn("lease keeper failed to renew lease id={}, user_id={}, worker_id={}, reason=unknown",
+                spdlog::warn("lease keeper failed to renew lease id={}, user_id={}, worker_id={}, "
+                             "reason=unknown",
                              taskId, userId, workerId);
             }
 
@@ -136,8 +135,7 @@ std::jthread startLeaseKeeper(const models::ImageGeneration& task,
     });
 }
 
-void cleanupOrphanedStoredImage(const models::ImageGeneration& generation)
-{
+void cleanupOrphanedStoredImage(const models::ImageGeneration& generation) {
     if (generation.storage_key.empty()) {
         return;
     }
@@ -153,13 +151,13 @@ void cleanupOrphanedStoredImage(const models::ImageGeneration& generation)
         spdlog::warn("failed to remove orphaned storage object for task id={}, key={}, reason={}",
                      generation.id, generation.storage_key, ex.what());
     } catch (...) {
-        spdlog::warn("failed to remove orphaned storage object for task id={}, key={}, reason=unknown",
-                     generation.id, generation.storage_key);
+        spdlog::warn(
+            "failed to remove orphaned storage object for task id={}, key={}, reason=unknown",
+            generation.id, generation.storage_key);
     }
 }
 
-std::string buildRequestId()
-{
+std::string buildRequestId() {
     static thread_local std::mt19937_64 rng(std::random_device{}());
     const auto now = std::chrono::system_clock::now().time_since_epoch();
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
@@ -167,8 +165,7 @@ std::string buildRequestId()
     return std::format("img-{}-{:x}", millis, rand);
 }
 
-std::string downloadImageAsBase64(const std::string& url, long timeoutSeconds)
-{
+std::string downloadImageAsBase64(const std::string& url, long timeoutSeconds) {
     HttpClient client(timeoutSeconds);
     auto response = client.get(url, {}, true);
     if (!response.ok() || response.body.empty()) {
@@ -178,20 +175,17 @@ std::string downloadImageAsBase64(const std::string& url, long timeoutSeconds)
     return utils::encodeToBase64(response.body);
 }
 
-std::string toLower(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
+std::string toLower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return value;
 }
 
-std::string normalizeStatus(const std::string& rawStatus)
-{
+std::string normalizeStatus(const std::string& rawStatus) {
     const auto status = toLower(rawStatus);
 
-    if (status == "success" || status == "succeeded" || status == "completed" ||
-        status == "done" || status == "ok") {
+    if (status == "success" || status == "succeeded" || status == "completed" || status == "done" ||
+        status == "ok") {
         return "success";
     }
 
@@ -207,16 +201,14 @@ std::string normalizeStatus(const std::string& rawStatus)
     return status;
 }
 
-std::optional<std::string> getStringField(const nlohmann::json& json, const char* key)
-{
+std::optional<std::string> getStringField(const nlohmann::json& json, const char* key) {
     if (!json.contains(key) || !json.at(key).is_string()) {
         return std::nullopt;
     }
     return json.at(key).get<std::string>();
 }
 
-void mergeRemoteResult(const nlohmann::json& remoteJson, models::ImageGeneration& generation)
-{
+void mergeRemoteResult(const nlohmann::json& remoteJson, models::ImageGeneration& generation) {
     const nlohmann::json* payload = &remoteJson;
     if (remoteJson.contains("data") && remoteJson.at("data").is_object()) {
         payload = &remoteJson.at("data");
@@ -266,8 +258,7 @@ void mergeRemoteResult(const nlohmann::json& remoteJson, models::ImageGeneration
     }
 }
 
-models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation)
-{
+models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation) {
     long timeoutSeconds = 300;
     std::string serviceUrl;
 
@@ -279,13 +270,9 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation)
         timeoutSeconds = serviceConfig.value("timeout_seconds", 300);
 
         nlohmann::json modelPayload = {
-            {"prompt", generation.prompt},
-            {"negative_prompt", generation.negative_prompt},
-            {"num_steps", generation.num_steps},
-            {"height", generation.height},
-            {"width", generation.width},
-            {"request_id", generation.request_id}
-        };
+            {"prompt", generation.prompt},       {"negative_prompt", generation.negative_prompt},
+            {"num_steps", generation.num_steps}, {"height", generation.height},
+            {"width", generation.width},         {"request_id", generation.request_id}};
         if (generation.seed.has_value()) {
             modelPayload["seed"] = generation.seed.value();
         }
@@ -297,12 +284,14 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation)
             generation.status = "failed";
             generation.failure_code = "python_service_request_failed";
             if (!response.error.empty()) {
-                generation.error_message = std::format("python service request failed: {}", response.error);
+                generation.error_message =
+                    std::format("python service request failed: {}", response.error);
             } else {
-                generation.error_message = std::format("python service request failed, status: {}", response.status_code);
+                generation.error_message =
+                    std::format("python service request failed, status: {}", response.status_code);
             }
-            spdlog::warn("ImageService async call {} failed (status: {}, error: {})",
-                         generateUrl, response.status_code, response.error);
+            spdlog::warn("ImageService async call {} failed (status: {}, error: {})", generateUrl,
+                         response.status_code, response.error);
         } else if (response.body.empty()) {
             generation.status = "failed";
             generation.failure_code = "python_service_empty_response";
@@ -332,8 +321,8 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation)
     }
 
     if (generation.image_base64.empty() && !generation.image_url.empty()) {
-        const bool isAbsoluteHttpUrl = generation.image_url.starts_with("http://")
-            || generation.image_url.starts_with("https://");
+        const bool isAbsoluteHttpUrl = generation.image_url.starts_with("http://") ||
+                                       generation.image_url.starts_with("https://");
         if (!isAbsoluteHttpUrl && !serviceUrl.empty() && generation.image_url.starts_with("/")) {
             generation.image_url = serviceUrl + generation.image_url;
         }
@@ -341,7 +330,8 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation)
     }
 
     generation.status = normalizeStatus(generation.status);
-    if ((!generation.image_base64.empty() || !generation.image_url.empty()) && generation.status != "failed") {
+    if ((!generation.image_base64.empty() || !generation.image_url.empty()) &&
+        generation.status != "failed") {
         generation.status = "success";
         generation.failure_code.clear();
         generation.error_message.clear();
@@ -362,8 +352,7 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation)
     return generation;
 }
 
-void persistGeneratedImage(models::ImageGeneration& generation)
-{
+void persistGeneratedImage(models::ImageGeneration& generation) {
     if (generation.status != "success") {
         return;
     }
@@ -386,7 +375,8 @@ void persistGeneratedImage(models::ImageGeneration& generation)
     } catch (const std::exception& ex) {
         generation.status = "failed";
         generation.failure_code = "storage_write_failed";
-        generation.error_message = std::format("generation succeeded but failed to store image: {}", ex.what());
+        generation.error_message =
+            std::format("generation succeeded but failed to store image: {}", ex.what());
         generation.completed_at = Clock::now();
         generation.storage_key.clear();
         generation.image_base64.clear();
@@ -394,45 +384,44 @@ void persistGeneratedImage(models::ImageGeneration& generation)
     }
 }
 
-void workerLoop(std::stop_token stopToken, const std::string& workerId, const TaskEngineConfig& config)
-{
+void workerLoop(std::stop_token stopToken, const std::string& workerId,
+                const TaskEngineConfig& config) {
     ImageRepo repo;
 
     while (!stopToken.stop_requested()) {
         try {
-			auto task = repo.claimNextTask(workerId, config.lease_seconds);
+            auto task = repo.claimNextTask(workerId, config.lease_seconds);
             if (!task) {
                 // Wait on condition variable instead of blind sleep.
                 // Wakes up when create()/retryById() notify, or after
                 // poll_interval_ms as fallback. stop_token is checked
                 // by the outer while loop on next iteration.
                 std::unique_lock lock(taskNotifyMutex());
-                taskNotifyCv().wait_for(lock,
-                    std::chrono::milliseconds(config.poll_interval_ms));
-				continue;
+                taskNotifyCv().wait_for(lock, std::chrono::milliseconds(config.poll_interval_ms));
+                continue;
             }
 
-			spdlog::info("task worker claimed task id={}, user_id={}, request_id={}, worker_id={}",
-			             task->id, task->user_id, task->request_id, workerId);
+            spdlog::info("task worker claimed task id={}, user_id={}, request_id={}, worker_id={}",
+                         task->id, task->user_id, task->request_id, workerId);
             TaskEventHub::instance().publishTaskUpdated(*task);
 
             auto leaseKeeper = startLeaseKeeper(*task, workerId, config.lease_seconds);
-			auto result = runRemoteGeneration(*task);
-			persistGeneratedImage(result);
+            auto result = runRemoteGeneration(*task);
+            persistGeneratedImage(result);
             const bool finished = repo.finishClaimedTask(result);
             leaseKeeper.request_stop();
 
             if (!finished) {
                 cleanupOrphanedStoredImage(result);
-				spdlog::warn("task worker failed to finish claimed task id={}, user_id={}, worker_id={}",
-				             task->id, task->user_id, workerId);
+                spdlog::warn(
+                    "task worker failed to finish claimed task id={}, user_id={}, worker_id={}",
+                    task->id, task->user_id, workerId);
             } else {
                 TaskEventHub::instance().publishTaskUpdated(result);
             }
-		}
-		catch (const std::exception& ex) {
+        } catch (const std::exception& ex) {
             spdlog::error("task worker exception: {}, worker_id={}", ex.what(), workerId);
-			std::this_thread::sleep_for(std::chrono::milliseconds(config.poll_interval_ms));
+            std::this_thread::sleep_for(std::chrono::milliseconds(config.poll_interval_ms));
         } catch (...) {
             spdlog::error("task worker unknown exception, worker_id={}", workerId);
             std::this_thread::sleep_for(std::chrono::milliseconds(config.poll_interval_ms));
@@ -440,13 +429,13 @@ void workerLoop(std::stop_token stopToken, const std::string& workerId, const Ta
     }
 }
 
-void leaseExpiryLoop(std::stop_token stopToken, int intervalSeconds)
-{
+void leaseExpiryLoop(std::stop_token stopToken, int intervalSeconds) {
     ImageRepo repo;
 
     while (!stopToken.stop_requested()) {
         std::this_thread::sleep_for(std::chrono::seconds(intervalSeconds));
-        if (stopToken.stop_requested()) break;
+        if (stopToken.stop_requested())
+            break;
 
         try {
             int expired = repo.expireLeases();
@@ -462,27 +451,28 @@ void leaseExpiryLoop(std::stop_token stopToken, int intervalSeconds)
 
 void ensureWorkersStarted() {
     std::call_once(workerStartOnce(), [] {
-		const auto& cfg = taskEngineConfig();
+        const auto& cfg = taskEngineConfig();
         if (cfg.workers <= 0) {
             spdlog::info("ImageService task engine disabled");
             return;
         }
 
-		auto& workers = taskWorkers();
-		// +1 for the lease expiry scanner thread
-		workers.reserve(cfg.workers + 1);
+        auto& workers = taskWorkers();
+        // +1 for the lease expiry scanner thread
+        workers.reserve(cfg.workers + 1);
 
         for (int i = 0; i < cfg.workers; ++i) {
-			const auto workerId = std::format("{}-{}", cfg.worker_prefix, i + 1);
+            const auto workerId = std::format("{}-{}", cfg.worker_prefix, i + 1);
             workers.emplace_back(workerLoop, workerId, cfg);
         }
 
-		// Lease expiry scanner: runs every 30 seconds to recover stuck tasks
-		constexpr int kLeaseExpiryIntervalSeconds = 30;
-		workers.emplace_back(leaseExpiryLoop, kLeaseExpiryIntervalSeconds);
+        // Lease expiry scanner: runs every 30 seconds to recover stuck tasks
+        constexpr int kLeaseExpiryIntervalSeconds = 30;
+        workers.emplace_back(leaseExpiryLoop, kLeaseExpiryIntervalSeconds);
 
-		spdlog::info("ImageService task engine started with {} worker(s) + lease scanner", cfg.workers);
-	});
+        spdlog::info("ImageService task engine started with {} worker(s) + lease scanner",
+                     cfg.workers);
+    });
 }
 
 constexpr size_t kPromptMinLength = 3;
@@ -494,16 +484,15 @@ constexpr int kImageSizeStep = 64;
 constexpr int kMinNumSteps = 1;
 constexpr int kMaxNumSteps = 50;
 
-void trimInPlace(std::string& s)
-{
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(),
-        [](unsigned char c) { return !std::isspace(c); }));
-    s.erase(std::find_if(s.rbegin(), s.rend(),
-        [](unsigned char c) { return !std::isspace(c); }).base(), s.end());
+void trimInPlace(std::string& s) {
+    s.erase(s.begin(),
+            std::find_if(s.begin(), s.end(), [](unsigned char c) { return !std::isspace(c); }));
+    s.erase(
+        std::find_if(s.rbegin(), s.rend(), [](unsigned char c) { return !std::isspace(c); }).base(),
+        s.end());
 }
 
-std::optional<ServiceError> validateGenerationParams(models::ImageGeneration& generation)
-{
+std::optional<ServiceError> validateGenerationParams(models::ImageGeneration& generation) {
     trimInPlace(generation.prompt);
     trimInPlace(generation.negative_prompt);
 
@@ -511,32 +500,37 @@ std::optional<ServiceError> validateGenerationParams(models::ImageGeneration& ge
         return ServiceError{drogon::k400BadRequest, "prompt_required", "prompt is required"};
     }
 
-    if (generation.prompt.size() < kPromptMinLength || generation.prompt.size() > kPromptMaxLength) {
+    if (generation.prompt.size() < kPromptMinLength ||
+        generation.prompt.size() > kPromptMaxLength) {
         return ServiceError{drogon::k400BadRequest, "invalid_prompt_length",
-            std::format("prompt length must be between {} and {} characters",
-                        kPromptMinLength, kPromptMaxLength)};
+                            std::format("prompt length must be between {} and {} characters",
+                                        kPromptMinLength, kPromptMaxLength)};
     }
 
     if (generation.negative_prompt.size() > kNegativePromptMaxLength) {
-        return ServiceError{drogon::k400BadRequest, "invalid_negative_prompt_length",
+        return ServiceError{
+            drogon::k400BadRequest, "invalid_negative_prompt_length",
             std::format("negative_prompt must be at most {} characters", kNegativePromptMaxLength)};
     }
 
     if (generation.num_steps < kMinNumSteps || generation.num_steps > kMaxNumSteps) {
-        return ServiceError{drogon::k400BadRequest, "invalid_num_steps",
+        return ServiceError{
+            drogon::k400BadRequest, "invalid_num_steps",
             std::format("num_steps must be between {} and {}", kMinNumSteps, kMaxNumSteps)};
     }
 
-    if (generation.width < kMinImageSize || generation.width > kMaxImageSize || generation.width % kImageSizeStep != 0) {
+    if (generation.width < kMinImageSize || generation.width > kMaxImageSize ||
+        generation.width % kImageSizeStep != 0) {
         return ServiceError{drogon::k400BadRequest, "invalid_width",
-            std::format("width must be between {} and {} and a multiple of {}",
-                        kMinImageSize, kMaxImageSize, kImageSizeStep)};
+                            std::format("width must be between {} and {} and a multiple of {}",
+                                        kMinImageSize, kMaxImageSize, kImageSizeStep)};
     }
 
-    if (generation.height < kMinImageSize || generation.height > kMaxImageSize || generation.height % kImageSizeStep != 0) {
+    if (generation.height < kMinImageSize || generation.height > kMaxImageSize ||
+        generation.height % kImageSizeStep != 0) {
         return ServiceError{drogon::k400BadRequest, "invalid_height",
-            std::format("height must be between {} and {} and a multiple of {}",
-                        kMinImageSize, kMaxImageSize, kImageSizeStep)};
+                            std::format("height must be between {} and {} and a multiple of {}",
+                                        kMinImageSize, kMaxImageSize, kImageSizeStep)};
     }
 
     if (generation.seed.has_value() && generation.seed.value() < 0) {
@@ -548,16 +542,15 @@ std::optional<ServiceError> validateGenerationParams(models::ImageGeneration& ge
 
 } // namespace
 
-void ImageService::bootstrapWorkers()
-{
-	ensureWorkersStarted();
+void ImageService::bootstrapWorkers() {
+    ensureWorkersStarted();
 }
 
-std::expected<ImageCreateResult, ServiceError> ImageService::create(int64_t userId,
-                                                                     const nlohmann::json& payload) const
-{
+std::expected<ImageCreateResult, ServiceError>
+ImageService::create(int64_t userId, const nlohmann::json& payload) const {
     if (userId <= 0) {
-        return std::unexpected(ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
+        return std::unexpected(
+            ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
     models::ImageGeneration generation = models::ImageGeneration::fromJson(payload);
@@ -568,7 +561,8 @@ std::expected<ImageCreateResult, ServiceError> ImageService::create(int64_t user
 
     generation.user_id = userId;
     generation.created_at = std::chrono::system_clock::now();
-    generation.request_id = generation.request_id.empty() ? buildRequestId() : generation.request_id;
+    generation.request_id =
+        generation.request_id.empty() ? buildRequestId() : generation.request_id;
     generation.status = "queued";
     generation.error_message.clear();
     generation.completed_at = std::nullopt;
@@ -579,29 +573,32 @@ std::expected<ImageCreateResult, ServiceError> ImageService::create(int64_t user
     try {
         ImageRepo repo;
 
-		if (auto existing = repo.findByRequestIdAndUserId(generation.request_id, userId)) {
-            spdlog::info("ImageService create with existing request_id, returning existing generation, request_id={}, user_id={}", generation.request_id, userId);
+        if (auto existing = repo.findByRequestIdAndUserId(generation.request_id, userId)) {
+            spdlog::info("ImageService create with existing request_id, returning existing "
+                         "generation, request_id={}, user_id={}",
+                         generation.request_id, userId);
             return ImageCreateResult{*existing};
         }
 
         generation.id = repo.insert(generation);
         TaskEventHub::instance().publishTaskUpdated(generation);
-		ensureWorkersStarted();
-		notifyWorkers();
+        ensureWorkersStarted();
+        notifyWorkers();
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::create persist error: {}", ex.what());
-        return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_history_persist_failed", "failed to persist image history"});
+        return std::unexpected(ServiceError{drogon::k500InternalServerError,
+                                            "image_history_persist_failed",
+                                            "failed to persist image history"});
     }
 
     return ImageCreateResult{generation};
 }
 
-std::expected<ImageListResult, ServiceError> ImageService::listMy(int64_t userId,
-                                                                   int page,
-                                                                   int size) const
-{
+std::expected<ImageListResult, ServiceError> ImageService::listMy(int64_t userId, int page,
+                                                                  int size) const {
     if (userId <= 0) {
-        return std::unexpected(ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
+        return std::unexpected(
+            ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
     try {
@@ -610,17 +607,17 @@ std::expected<ImageListResult, ServiceError> ImageService::listMy(int64_t userId
         return ImageListResult{std::move(result.content), result.total_elements};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::listMy error: {}", ex.what());
-        return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_history_load_failed", "failed to load image history"});
+        return std::unexpected(ServiceError{drogon::k500InternalServerError,
+                                            "image_history_load_failed",
+                                            "failed to load image history"});
     }
 }
 
-std::expected<ImageListResult, ServiceError> ImageService::listMyByStatus(int64_t userId,
-                                                                          const std::string& status,
-                                                                          int page,
-                                                                          int size) const
-{
+std::expected<ImageListResult, ServiceError>
+ImageService::listMyByStatus(int64_t userId, const std::string& status, int page, int size) const {
     if (userId <= 0) {
-        return std::unexpected(ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
+        return std::unexpected(
+            ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
     const auto target = normalizeStatus(status);
@@ -631,23 +628,25 @@ std::expected<ImageListResult, ServiceError> ImageService::listMyByStatus(int64_
         return ImageListResult{std::move(result.content), result.total_elements};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::listMyByStatus error: {}", ex.what());
-        return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_history_load_failed", "failed to load image history"});
+        return std::unexpected(ServiceError{drogon::k500InternalServerError,
+                                            "image_history_load_failed",
+                                            "failed to load image history"});
     }
 }
 
-std::expected<ImageGetResult, ServiceError> ImageService::getById(int64_t userId,
-                                                                   int64_t id,
-                                                                   bool includeImagePayload) const
-{
+std::expected<ImageGetResult, ServiceError> ImageService::getById(int64_t userId, int64_t id,
+                                                                  bool includeImagePayload) const {
     if (userId <= 0) {
-        return std::unexpected(ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
+        return std::unexpected(
+            ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
     try {
         ImageRepo repo;
         auto image = repo.findByIdAndUserId(id, userId);
         if (!image) {
-            return std::unexpected(ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
+            return std::unexpected(
+                ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
         }
 
         image->image_base64.clear();
@@ -656,7 +655,8 @@ std::expected<ImageGetResult, ServiceError> ImageService::getById(int64_t userId
                 ImageStorage storage;
                 image->image_url = storage.presignUrl(image->storage_key);
             } catch (const std::exception& ex) {
-                spdlog::warn("ImageService::getById failed to generate presigned URL, id={}, user_id={}, reason={}",
+                spdlog::warn("ImageService::getById failed to generate presigned URL, id={}, "
+                             "user_id={}, reason={}",
                              id, userId, ex.what());
             }
         }
@@ -664,93 +664,107 @@ std::expected<ImageGetResult, ServiceError> ImageService::getById(int64_t userId
         return ImageGetResult{*image};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::getById error: {}", ex.what());
-        return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_lookup_failed", "failed to load image"});
+        return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_lookup_failed",
+                                            "failed to load image"});
     }
 }
 
-std::expected<ImageGetResult, ServiceError> ImageService::cancelById(int64_t userId, int64_t id) const
-{
+std::expected<ImageGetResult, ServiceError> ImageService::cancelById(int64_t userId,
+                                                                     int64_t id) const {
     if (userId <= 0) {
-        return std::unexpected(ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
+        return std::unexpected(
+            ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
     try {
         ImageRepo repo;
-		auto current = repo.findByIdAndUserId(id, userId);
+        auto current = repo.findByIdAndUserId(id, userId);
         if (!current) {
-            return std::unexpected(ServiceError{drogon::k404NotFound, "task_not_found", "task not found"});
+            return std::unexpected(
+                ServiceError{drogon::k404NotFound, "task_not_found", "task not found"});
         }
 
         if (!task_state::canCancel(current->status)) {
-            ServiceError err{drogon::k400BadRequest, "task_cancel_not_allowed", "task is already completed and cannot be cancelled"};
+            ServiceError err{drogon::k400BadRequest, "task_cancel_not_allowed",
+                             "task is already completed and cannot be cancelled"};
             err.details["status"] = current->status;
             return std::unexpected(std::move(err));
         }
 
-		models::ImageGeneration updated;
-		if (!repo.cancelByIdAndUserId(id, userId, &updated)) {
-            return std::unexpected(ServiceError{drogon::k409Conflict, "task_cancel_conflict", "task cannot be canceled"});
+        models::ImageGeneration updated;
+        if (!repo.cancelByIdAndUserId(id, userId, &updated)) {
+            return std::unexpected(ServiceError{drogon::k409Conflict, "task_cancel_conflict",
+                                                "task cannot be canceled"});
         }
 
         TaskEventHub::instance().publishTaskUpdated(updated);
-		return ImageGetResult{updated};
+        return ImageGetResult{updated};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::cancelById error: {}", ex.what());
-        return std::unexpected(ServiceError{drogon::k500InternalServerError, "task_cancel_failed", "failed to cancel task"});
+        return std::unexpected(ServiceError{drogon::k500InternalServerError, "task_cancel_failed",
+                                            "failed to cancel task"});
     }
 }
 
-std::expected<ImageGetResult, ServiceError> ImageService::retryById(int64_t userId, int64_t id) const
-{
+std::expected<ImageGetResult, ServiceError> ImageService::retryById(int64_t userId,
+                                                                    int64_t id) const {
     if (userId <= 0) {
-        return std::unexpected(ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
+        return std::unexpected(
+            ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
     try {
-		ImageRepo repo;
-		auto current = repo.findByIdAndUserId(id, userId);
+        ImageRepo repo;
+        auto current = repo.findByIdAndUserId(id, userId);
         if (!current) {
-            return std::unexpected(ServiceError{drogon::k404NotFound, "task_not_found", "task not found"});
-		}
+            return std::unexpected(
+                ServiceError{drogon::k404NotFound, "task_not_found", "task not found"});
+        }
 
-		if (!task_state::canRetry(current->status, current->retry_count, current->max_retries)) {
-            ServiceError err{drogon::k409Conflict, "task_retry_not_allowed", "only failed, timeout or canceled tasks can be retried"};
+        if (!task_state::canRetry(current->status, current->retry_count, current->max_retries)) {
+            ServiceError err{drogon::k409Conflict, "task_retry_not_allowed",
+                             "only failed, timeout or canceled tasks can be retried"};
             err.details["status"] = current->status;
             err.details["retryCount"] = current->retry_count;
             err.details["maxRetries"] = current->max_retries;
             return std::unexpected(std::move(err));
         }
 
-		models::ImageGeneration updated;
-		if (!repo.retryByIdAndUserId(id, userId, &updated)) {
-            return std::unexpected(ServiceError{drogon::k409Conflict, "task_retry_conflict", "task cannot be retried"});
+        models::ImageGeneration updated;
+        if (!repo.retryByIdAndUserId(id, userId, &updated)) {
+            return std::unexpected(ServiceError{drogon::k409Conflict, "task_retry_conflict",
+                                                "task cannot be retried"});
         }
 
         TaskEventHub::instance().publishTaskUpdated(updated);
-		ensureWorkersStarted();
-		notifyWorkers();
-		return ImageGetResult{updated};
+        ensureWorkersStarted();
+        notifyWorkers();
+        return ImageGetResult{updated};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::retryById error: {}", ex.what());
-        return std::unexpected(ServiceError{drogon::k500InternalServerError, "task_retry_failed", "failed to retry task"});
+        return std::unexpected(ServiceError{drogon::k500InternalServerError, "task_retry_failed",
+                                            "failed to retry task"});
     }
 }
 
-std::expected<ImageBinaryResult, ServiceError> ImageService::getBinaryById(int64_t userId, int64_t id) const
-{
+std::expected<ImageBinaryResult, ServiceError> ImageService::getBinaryById(int64_t userId,
+                                                                           int64_t id) const {
     if (userId <= 0) {
-        return std::unexpected(ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
+        return std::unexpected(
+            ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
     try {
         ImageRepo repo;
         auto image = repo.findByIdAndUserId(id, userId);
         if (!image) {
-            return std::unexpected(ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
+            return std::unexpected(
+                ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
         }
 
         if (!task_state::canReturnBinary(image->status, image->storage_key)) {
-            ServiceError err{drogon::k409Conflict, "image_binary_not_ready", "image binary is not ready"};
+            ServiceError err{drogon::k409Conflict, "image_binary_not_ready",
+                             "image binary is not ready"};
             err.details["status"] = image->status;
             return std::unexpected(std::move(err));
         }
@@ -758,7 +772,8 @@ std::expected<ImageBinaryResult, ServiceError> ImageService::getBinaryById(int64
         ImageStorage storage;
         auto bytes = storage.getBytes(image->storage_key);
         if (!bytes) {
-            ServiceError err{drogon::k500InternalServerError, "image_storage_read_failed", "failed to load image binary"};
+            ServiceError err{drogon::k500InternalServerError, "image_storage_read_failed",
+                             "failed to load image binary"};
             err.details["storageKey"] = image->storage_key;
             return std::unexpected(std::move(err));
         }
@@ -766,14 +781,16 @@ std::expected<ImageBinaryResult, ServiceError> ImageService::getBinaryById(int64
         return ImageBinaryResult{*bytes, storage.contentTypeForKey(image->storage_key)};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::getBinaryById error: {}", ex.what());
-        return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_binary_lookup_failed", "failed to load image binary"});
+        return std::unexpected(ServiceError{drogon::k500InternalServerError,
+                                            "image_binary_lookup_failed",
+                                            "failed to load image binary"});
     }
 }
 
-std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64_t id) const
-{
+std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64_t id) const {
     if (userId <= 0) {
-        return std::unexpected(ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
+        return std::unexpected(
+            ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
     try {
@@ -782,7 +799,8 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
         // Must check terminal state before deleting — can't delete in-progress tasks.
         auto current = repo.findByIdAndUserId(id, userId);
         if (!current) {
-            return std::unexpected(ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
+            return std::unexpected(
+                ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
         }
 
         if (!task_state::canDelete(current->status)) {
@@ -793,7 +811,8 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
         }
 
         if (!repo.deleteByIdAndUserId(id, userId)) {
-            return std::unexpected(ServiceError{drogon::k409Conflict, "task_delete_conflict", "task cannot be deleted in its current state"});
+            return std::unexpected(ServiceError{drogon::k409Conflict, "task_delete_conflict",
+                                                "task cannot be deleted in its current state"});
         }
 
         // Clean up the stored object to prevent storage leaks.
@@ -802,7 +821,8 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
                 ImageStorage storage;
                 storage.remove(current->storage_key);
             } catch (const std::exception& ex) {
-                spdlog::warn("ImageService::deleteById failed to remove storage object, id={}, key={}, reason={}",
+                spdlog::warn("ImageService::deleteById failed to remove storage object, id={}, "
+                             "key={}, reason={}",
                              id, current->storage_key, ex.what());
             }
         }
@@ -810,12 +830,12 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
         return {};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::deleteById error: {}", ex.what());
-        return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_delete_failed", "failed to delete image"});
+        return std::unexpected(ServiceError{drogon::k500InternalServerError, "image_delete_failed",
+                                            "failed to delete image"});
     }
 }
 
-ImageHealthResult ImageService::checkHealth() const
-{
+ImageHealthResult ImageService::checkHealth() const {
     ImageHealthResult result;
 
     try {
@@ -835,8 +855,8 @@ ImageHealthResult ImageService::checkHealth() const
         if (!response.ok()) {
             result.status = "unhealthy";
             result.detail = !response.error.empty()
-                ? response.error
-                : std::format("http status {}", response.status_code);
+                                ? response.error
+                                : std::format("http status {}", response.status_code);
             return result;
         }
 
@@ -856,7 +876,8 @@ ImageHealthResult ImageService::checkHealth() const
         const auto remoteStatus = toLower(healthJson.value("status", std::string{}));
         result.model_loaded = healthJson.value("model_loaded", false);
 
-        if (remoteStatus == "healthy" || remoteStatus == "ok" || remoteStatus == "success" || result.model_loaded) {
+        if (remoteStatus == "healthy" || remoteStatus == "ok" || remoteStatus == "success" ||
+            result.model_loaded) {
             result.status = "healthy";
         } else {
             result.status = "unhealthy";

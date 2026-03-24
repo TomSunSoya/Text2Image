@@ -8,7 +8,12 @@
             <p v-if="hasActiveTasks" class="subtitle">检测到进行中的任务，等待服务端推送更新。</p>
           </div>
           <div class="header-actions">
-            <el-select v-model="selectedStatus" size="small" style="width: 180px" @change="handleStatusChange">
+            <el-select
+              v-model="selectedStatus"
+              size="small"
+              style="width: 180px"
+              @change="handleStatusChange"
+            >
               <el-option
                 v-for="option in statusOptions"
                 :key="option.value"
@@ -62,14 +67,25 @@
                 </div>
                 <div class="details">
                   <p><strong>Prompt:</strong> {{ row.prompt }}</p>
-                  <p v-if="row.negativePrompt"><strong>Negative Prompt:</strong> {{ row.negativePrompt }}</p>
+                  <p v-if="row.negativePrompt">
+                    <strong>Negative Prompt:</strong> {{ row.negativePrompt }}
+                  </p>
                   <p><strong>Request ID:</strong> {{ row.requestId || '-' }}</p>
-                  <p><strong>Params:</strong> {{ row.width }} x {{ row.height }}, steps: {{ row.numSteps }}</p>
-                  <p><strong>Retry:</strong> {{ row.retryCount || 0 }} / {{ row.maxRetries || 0 }}</p>
+                  <p>
+                    <strong>Params:</strong> {{ row.width }} x {{ row.height }}, steps:
+                    {{ row.numSteps }}
+                  </p>
+                  <p>
+                    <strong>Retry:</strong> {{ row.retryCount || 0 }} / {{ row.maxRetries || 0 }}
+                  </p>
                   <p v-if="row.failureCode"><strong>Failure Code:</strong> {{ row.failureCode }}</p>
                   <p v-if="row.errorMessage"><strong>Error:</strong> {{ row.errorMessage }}</p>
-                  <p v-if="row.completedAt"><strong>Completed At:</strong> {{ formatDate(row.completedAt) }}</p>
-                  <p v-if="row.cancelledAt"><strong>Cancelled At:</strong> {{ formatDate(row.cancelledAt) }}</p>
+                  <p v-if="row.completedAt">
+                    <strong>Completed At:</strong> {{ formatDate(row.completedAt) }}
+                  </p>
+                  <p v-if="row.cancelledAt">
+                    <strong>Cancelled At:</strong> {{ formatDate(row.cancelledAt) }}
+                  </p>
                 </div>
               </div>
             </el-skeleton>
@@ -85,9 +101,7 @@
         </el-table-column>
 
         <el-table-column label="Size" width="140">
-          <template #default="{ row }">
-            {{ row.width }} x {{ row.height }}
-          </template>
+          <template #default="{ row }"> {{ row.width }} x {{ row.height }} </template>
         </el-table-column>
 
         <el-table-column label="Status" width="120">
@@ -116,7 +130,12 @@
               <el-button
                 type="primary"
                 size="small"
-                :disabled="row.__detailLoading || row.__binaryLoading || Boolean(row.__actionType) || !canDownloadTask(row)"
+                :disabled="
+                  row.__detailLoading ||
+                  row.__binaryLoading ||
+                  Boolean(row.__actionType) ||
+                  !canDownloadTask(row)
+                "
                 @click.stop="handleDownload(row)"
               >
                 Download
@@ -170,26 +189,26 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { imageApi } from '@/api/image'
-import { subscribeTaskEvents } from '@/utils/taskSocket'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { imageApi } from '@/api/image';
+import { subscribeTaskEvents } from '@/utils/taskSocket';
 import {
   canCancelImageTask,
   canDownloadImageTask,
   canRetryImageTask,
   getImageStatusTagType,
   isImageActiveStatus,
-  isImageTerminalStatus
-} from '@/utils/imageTask'
+  isImageTerminalStatus,
+} from '@/utils/imageTask';
 
-const tableRef = ref(null)
-const loading = ref(false)
-const historyList = ref([])
-const currentPage = ref(1)
-const pageSize = ref(10)
-const total = ref(0)
-const selectedStatus = ref('all')
+const tableRef = ref(null);
+const loading = ref(false);
+const historyList = ref([]);
+const currentPage = ref(1);
+const pageSize = ref(10);
+const total = ref(0);
+const selectedStatus = ref('all');
 
 const statusOptions = [
   { label: 'All Statuses', value: 'all' },
@@ -199,16 +218,18 @@ const statusOptions = [
   { label: 'Success', value: 'success' },
   { label: 'Failed', value: 'failed' },
   { label: 'Cancelled', value: 'cancelled' },
-  { label: 'Timeout', value: 'timeout' }
-]
+  { label: 'Timeout', value: 'timeout' },
+];
 
-const hasActiveTasks = computed(() => historyList.value.some(row => isImageActiveStatus(row.status)))
+const hasActiveTasks = computed(() =>
+  historyList.value.some((row) => isImageActiveStatus(row.status))
+);
 
-let socketUnsubscribe = null
-let refreshTimer = 0
+let socketUnsubscribe = null;
+let refreshTimer = 0;
 
 const normalizeRow = (item, previousRow = null) => {
-  const merged = previousRow ? { ...previousRow, ...item } : { ...item }
+  const merged = previousRow ? { ...previousRow, ...item } : { ...item };
 
   return {
     ...merged,
@@ -216,361 +237,365 @@ const normalizeRow = (item, previousRow = null) => {
     __detailLoading: false,
     __binaryLoading: false,
     __actionType: '',
-    __imageObjectUrl: previousRow?.__imageObjectUrl || ''
-  }
-}
+    __imageObjectUrl: previousRow?.__imageObjectUrl || '',
+  };
+};
 
 const revokeRowObjectUrl = (row) => {
   if (row?.__imageObjectUrl && row.__imageObjectUrl.startsWith('blob:')) {
-    URL.revokeObjectURL(row.__imageObjectUrl)
+    URL.revokeObjectURL(row.__imageObjectUrl);
   }
 
   if (row) {
-    row.__imageObjectUrl = ''
+    row.__imageObjectUrl = '';
   }
-}
+};
 
 const revokeAllObjectUrls = () => {
-  historyList.value.forEach(revokeRowObjectUrl)
-}
+  historyList.value.forEach(revokeRowObjectUrl);
+};
 
 const rebuildHistoryList = (rawList) => {
-  const previousMap = new Map(historyList.value.map(row => [row.id, row]))
-  const nextIds = new Set(rawList.map(item => item.id))
+  const previousMap = new Map(historyList.value.map((row) => [row.id, row]));
+  const nextIds = new Set(rawList.map((item) => item.id));
 
-  historyList.value.forEach(row => {
+  historyList.value.forEach((row) => {
     if (!nextIds.has(row.id)) {
-      revokeRowObjectUrl(row)
+      revokeRowObjectUrl(row);
     }
-  })
+  });
 
-  return rawList.map(item => normalizeRow(item, previousMap.get(item.id)))
-}
+  return rawList.map((item) => normalizeRow(item, previousMap.get(item.id)));
+};
 
 const clearRefreshTimer = () => {
   if (refreshTimer) {
-    window.clearTimeout(refreshTimer)
-    refreshTimer = null
+    window.clearTimeout(refreshTimer);
+    refreshTimer = null;
   }
-}
+};
 
 const scheduleSocketRefresh = () => {
   if (loading.value || refreshTimer) {
-    return
+    return;
   }
 
   refreshTimer = window.setTimeout(async () => {
-    refreshTimer = null
-    await loadHistory({ silent: true })
-  }, 150)
-}
+    refreshTimer = null;
+    await loadHistory({ silent: true });
+  }, 150);
+};
 
 const handleTaskSocketEvent = (event) => {
   if (event?.type !== 'image.task.updated') {
-    return
+    return;
   }
 
-  scheduleSocketRefresh()
-}
+  scheduleSocketRefresh();
+};
 
 const loadHistory = async (options = {}) => {
-  const { silent = false } = options
+  const { silent = false } = options;
 
   if (!silent) {
-    loading.value = true
+    loading.value = true;
   }
 
   try {
     const params = {
       page: currentPage.value - 1,
-      size: pageSize.value
-    }
+      size: pageSize.value,
+    };
 
-    const response = selectedStatus.value === 'all'
-      ? await imageApi.getMyImages(params)
-      : await imageApi.getImagesByStatus(selectedStatus.value, params)
+    const response =
+      selectedStatus.value === 'all'
+        ? await imageApi.getMyImages(params)
+        : await imageApi.getImagesByStatus(selectedStatus.value, params);
 
-    const rawList = response?.data?.content || []
-    historyList.value = rebuildHistoryList(rawList)
-    total.value = response?.data?.totalElements || 0
+    const rawList = response?.data?.content || [];
+    historyList.value = rebuildHistoryList(rawList);
+    total.value = response?.data?.totalElements || 0;
   } catch (error) {
     if (!silent) {
-      ElMessage.error(error?.message || 'Failed to load history')
+      ElMessage.error(error?.message || 'Failed to load history');
     } else {
-      console.error('Auto refresh history failed:', error)
+      console.error('Auto refresh history failed:', error);
     }
   } finally {
     if (!silent) {
-      loading.value = false
+      loading.value = false;
     }
   }
-}
+};
 
 const handleStatusChange = () => {
-  currentPage.value = 1
-  loadHistory()
-}
+  currentPage.value = 1;
+  loadHistory();
+};
 
 const handleSizeChange = () => {
-  currentPage.value = 1
-  loadHistory()
-}
+  currentPage.value = 1;
+  loadHistory();
+};
 
 const handleCurrentChange = () => {
-  loadHistory()
-}
+  loadHistory();
+};
 
-const isHttpUrl = (url) => typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'))
+const isHttpUrl = (url) =>
+  typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'));
 
 const buildImageUrl = (row) => {
   if (row?.imageBase64) {
-    return `data:image/png;base64,${String(row.imageBase64).replace(/\s/g, '')}`
+    return `data:image/png;base64,${String(row.imageBase64).replace(/\s/g, '')}`;
   }
 
   if (isHttpUrl(row?.imageUrl)) {
-    return row.imageUrl
+    return row.imageUrl;
   }
 
   if (row?.__imageObjectUrl) {
-    return row.__imageObjectUrl
+    return row.__imageObjectUrl;
   }
 
-  return ''
-}
+  return '';
+};
 
 const ensureRowDetail = async (row) => {
   if (!row?.id || row.__detailLoaded || row.__detailLoading) {
-    return
+    return;
   }
 
-  row.__detailLoading = true
+  row.__detailLoading = true;
   try {
-    const response = await imageApi.getImageById(row.id)
-    const detail = response?.data || {}
-    Object.assign(row, detail)
-    row.__detailLoaded = true
+    const response = await imageApi.getImageById(row.id);
+    const detail = response?.data || {};
+    Object.assign(row, detail);
+    row.__detailLoaded = true;
   } catch (error) {
-    ElMessage.error(error?.message || 'Failed to load image detail')
+    ElMessage.error(error?.message || 'Failed to load image detail');
   } finally {
-    row.__detailLoading = false
+    row.__detailLoading = false;
   }
-}
+};
 
 const ensureBinaryLoaded = async (row) => {
   if (!row?.id || row.__binaryLoading || row.__imageObjectUrl || row?.imageBase64) {
-    return
+    return;
   }
 
   if (!canDownloadImageTask(row?.status) || !row?.imageUrl) {
-    return
+    return;
   }
 
   if (isHttpUrl(row.imageUrl)) {
-    return
+    return;
   }
 
-  row.__binaryLoading = true
+  row.__binaryLoading = true;
   try {
-    const response = await imageApi.getImageBinary(row.id)
-    const blob = response?.data
+    const response = await imageApi.getImageBinary(row.id);
+    const blob = response?.data;
     if (!(blob instanceof Blob)) {
-      throw new Error('invalid image binary response')
+      throw new Error('invalid image binary response');
     }
 
-    revokeRowObjectUrl(row)
-    row.__imageObjectUrl = URL.createObjectURL(blob)
+    revokeRowObjectUrl(row);
+    row.__imageObjectUrl = URL.createObjectURL(blob);
   } catch (error) {
-    ElMessage.error(error?.message || 'Failed to load image preview')
+    ElMessage.error(error?.message || 'Failed to load image preview');
   } finally {
-    row.__binaryLoading = false
+    row.__binaryLoading = false;
   }
-}
+};
 
 const ensureRowVisual = async (row) => {
   if (!row) {
-    return
+    return;
   }
 
   if (!row.__detailLoaded) {
-    await ensureRowDetail(row)
+    await ensureRowDetail(row);
   }
 
   if (!row.imageBase64) {
-    await ensureBinaryLoaded(row)
+    await ensureBinaryLoaded(row);
   }
-}
+};
 
 const handleExpandChange = (row, expandedRows) => {
-  const expanded = Array.isArray(expandedRows) && expandedRows.some(item => item.id === row.id)
+  const expanded = Array.isArray(expandedRows) && expandedRows.some((item) => item.id === row.id);
   if (expanded) {
-    ensureRowVisual(row)
+    ensureRowVisual(row);
   }
-}
+};
 
 const handleRowClick = (row, column, event) => {
-  const target = event?.target
+  const target = event?.target;
   if (!(target instanceof HTMLElement)) {
-    return
+    return;
   }
 
-  if (target.closest('.el-button, .el-table__expand-icon, .el-image, .el-image__inner, a, button')) {
-    return
+  if (
+    target.closest('.el-button, .el-table__expand-icon, .el-image, .el-image__inner, a, button')
+  ) {
+    return;
   }
 
-  tableRef.value?.toggleRowExpansion(row)
-}
+  tableRef.value?.toggleRowExpansion(row);
+};
 
 const handleDownload = async (row) => {
   if (!row?.id) {
-    ElMessage.warning('No image available for this record')
-    return
+    ElMessage.warning('No image available for this record');
+    return;
   }
 
-  const url = buildImageUrl(row)
+  const url = buildImageUrl(row);
 
   // For local URLs (data: or blob:), download directly
   if (url && !isHttpUrl(url)) {
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `generated_${row.requestId || row.id}.png`
-    link.click()
-    ElMessage.success('Download started')
-    return
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `generated_${row.requestId || row.id}.png`;
+    link.click();
+    ElMessage.success('Download started');
+    return;
   }
 
   // For HTTP URLs or no URL, fetch via binary endpoint for proper download
   try {
-    const response = await imageApi.getImageBinary(row.id)
-    const blob = response?.data
+    const response = await imageApi.getImageBinary(row.id);
+    const blob = response?.data;
     if (!(blob instanceof Blob)) {
-      throw new Error('invalid response')
+      throw new Error('invalid response');
     }
 
-    const blobUrl = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = blobUrl
-    link.download = `generated_${row.requestId || row.id}.png`
-    link.click()
-    URL.revokeObjectURL(blobUrl)
-    ElMessage.success('Download started')
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = `generated_${row.requestId || row.id}.png`;
+    link.click();
+    URL.revokeObjectURL(blobUrl);
+    ElMessage.success('Download started');
   } catch (error) {
-    ElMessage.error(error?.message || 'Download failed')
+    ElMessage.error(error?.message || 'Download failed');
   }
-}
+};
 
 const handleCancel = async (row) => {
   if (!row?.id || row.__actionType) {
-    return
+    return;
   }
 
   try {
     await ElMessageBox.confirm('Cancel this task?', 'Confirm', {
       confirmButtonText: 'Cancel Task',
       cancelButtonText: 'Keep Running',
-      type: 'warning'
-    })
+      type: 'warning',
+    });
   } catch (error) {
-    return
+    return;
   }
 
-  row.__actionType = 'cancel'
+  row.__actionType = 'cancel';
   try {
-    await imageApi.cancelImage(row.id)
-    ElMessage.success('Task cancelled')
-    await loadHistory()
+    await imageApi.cancelImage(row.id);
+    ElMessage.success('Task cancelled');
+    await loadHistory();
   } catch (error) {
-    console.error('Cancel task failed:', error)
+    console.error('Cancel task failed:', error);
   } finally {
-    row.__actionType = ''
+    row.__actionType = '';
   }
-}
+};
 
 const handleRetry = async (row) => {
   if (!row?.id || row.__actionType) {
-    return
+    return;
   }
 
-  row.__actionType = 'retry'
+  row.__actionType = 'retry';
   try {
-    await imageApi.retryImage(row.id)
-    ElMessage.success('Task requeued')
-    currentPage.value = 1
-    await loadHistory()
+    await imageApi.retryImage(row.id);
+    ElMessage.success('Task requeued');
+    currentPage.value = 1;
+    await loadHistory();
   } catch (error) {
-    console.error('Retry task failed:', error)
+    console.error('Retry task failed:', error);
   } finally {
-    row.__actionType = ''
+    row.__actionType = '';
   }
-}
+};
 
 const handleDelete = async (row) => {
   if (!row?.id || row.__actionType || !canDeleteTask(row)) {
-    return
+    return;
   }
 
   try {
     await ElMessageBox.confirm('Delete this record?', 'Confirm', {
       confirmButtonText: 'Delete',
       cancelButtonText: 'Cancel',
-      type: 'warning'
-    })
+      type: 'warning',
+    });
   } catch (error) {
-    return
+    return;
   }
 
-  row.__actionType = 'delete'
+  row.__actionType = 'delete';
   try {
-    await imageApi.deleteImage(row.id)
-    ElMessage.success('Deleted successfully')
+    await imageApi.deleteImage(row.id);
+    ElMessage.success('Deleted successfully');
 
     if (historyList.value.length === 1 && currentPage.value > 1) {
-      currentPage.value -= 1
+      currentPage.value -= 1;
     }
 
-    await loadHistory()
+    await loadHistory();
   } catch (error) {
-    console.error('Delete task failed:', error)
+    console.error('Delete task failed:', error);
   } finally {
-    row.__actionType = ''
+    row.__actionType = '';
   }
-}
+};
 
-const canCancelTask = (row) => canCancelImageTask(row?.status)
+const canCancelTask = (row) => canCancelImageTask(row?.status);
 
-const canRetryTask = (row) => canRetryImageTask(row)
+const canRetryTask = (row) => canRetryImageTask(row);
 
-const canDownloadTask = (row) => canDownloadImageTask(row?.status)
+const canDownloadTask = (row) => canDownloadImageTask(row?.status);
 
-const canDeleteTask = (row) => isImageTerminalStatus(row?.status)
+const canDeleteTask = (row) => isImageTerminalStatus(row?.status);
 
-const getStatusType = (status) => getImageStatusTagType(status)
+const getStatusType = (status) => getImageStatusTagType(status);
 
 const parseDate = (dateString) => {
   if (!dateString) {
-    return null
+    return null;
   }
 
-  const normalized = typeof dateString === 'string' ? dateString.replace(' ', 'T') : dateString
-  const date = new Date(normalized)
-  return Number.isNaN(date.getTime()) ? null : date
-}
+  const normalized = typeof dateString === 'string' ? dateString.replace(' ', 'T') : dateString;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
 
 const formatDate = (dateString) => {
-  const date = parseDate(dateString)
-  return date ? date.toLocaleString('zh-CN') : '-'
-}
+  const date = parseDate(dateString);
+  return date ? date.toLocaleString('zh-CN') : '-';
+};
 
 onMounted(() => {
-  loadHistory()
-  socketUnsubscribe = subscribeTaskEvents(handleTaskSocketEvent)
-})
+  loadHistory();
+  socketUnsubscribe = subscribeTaskEvents(handleTaskSocketEvent);
+});
 
 onBeforeUnmount(() => {
-  clearRefreshTimer()
-  socketUnsubscribe?.()
-  socketUnsubscribe = null
-  revokeAllObjectUrls()
-})
+  clearRefreshTimer();
+  socketUnsubscribe?.();
+  socketUnsubscribe = null;
+  revokeAllObjectUrls();
+});
 </script>
 
 <style scoped>
@@ -691,4 +716,3 @@ onBeforeUnmount(() => {
   }
 }
 </style>
-

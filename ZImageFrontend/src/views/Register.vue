@@ -115,75 +115,75 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
-import { useAuthStore } from '@/stores/auth'
-import { Picture, User, Lock, Message, Avatar, ArrowLeft } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive } from 'vue';
+import { useAuthStore } from '@/stores/auth';
+import { Picture, User, Lock, Message, Avatar, ArrowLeft } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 
-const authStore = useAuthStore()
-const registerFormRef = ref(null)
-const isRegistering = ref(false)
-const agreeTerms = ref(false)
+const authStore = useAuthStore();
+const registerFormRef = ref(null);
+const isRegistering = ref(false);
+const agreeTerms = ref(false);
 
 const registerForm = reactive({
   username: '',
   email: '',
   nickname: '',
   password: '',
-  confirmPassword: ''
-})
+  confirmPassword: '',
+});
 
 // 验证确认密码
 const validateConfirmPassword = (rule, value, callback) => {
   if (value === '') {
-    callback(new Error('请再次输入密码'))
+    callback(new Error('请再次输入密码'));
   } else if (value !== registerForm.password) {
-    callback(new Error('两次输入的密码不一致'))
+    callback(new Error('两次输入的密码不一致'));
   } else {
-    callback()
+    callback();
   }
-}
+};
 
 const rules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 3, max: 20, message: '用户名长度应在 3-20 个字符', trigger: 'blur' },
-    { pattern: /^[a-zA-Z0-9_]+$/, message: '用户名只能包含字母、数字和下划线', trigger: 'blur' }
+    { pattern: /^[a-zA-Z0-9_]+$/, message: '用户名只能包含字母、数字和下划线', trigger: 'blur' },
   ],
   email: [
     { required: true, message: '请输入邮箱', trigger: 'blur' },
-    { type: 'email', message: '请输入有效的邮箱地址', trigger: 'blur' }
+    { type: 'email', message: '请输入有效的邮箱地址', trigger: 'blur' },
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, max: 20, message: '密码长度应在 6-20 个字符', trigger: 'blur' }
+    { min: 6, max: 20, message: '密码长度应在 6-20 个字符', trigger: 'blur' },
   ],
   confirmPassword: [
     { required: true, message: '请确认密码', trigger: 'blur' },
-    { validator: validateConfirmPassword, trigger: 'blur' }
-  ]
-}
+    { validator: validateConfirmPassword, trigger: 'blur' },
+  ],
+};
 
 const handleRegister = async () => {
   if (!agreeTerms.value) {
-    ElMessage.warning('请阅读并同意服务条款和隐私政策')
-    return
+    ElMessage.warning('请阅读并同意服务条款和隐私政策');
+    return;
   }
 
   try {
-    await registerFormRef.value.validate()
-    isRegistering.value = true
+    await registerFormRef.value.validate();
+    isRegistering.value = true;
 
-    const { confirmPassword, ...userData } = registerForm
-    await authStore.register(userData)
+    const { confirmPassword, ...userData } = registerForm;
+    await authStore.register(userData);
   } catch (error) {
     if (error !== false) {
-      console.error('Register failed:', error)
+      console.error('Register failed:', error);
     }
   } finally {
-    isRegistering.value = false
+    isRegistering.value = false;
   }
-}
+};
 </script>
 
 <style scoped>
@@ -195,7 +195,11 @@ const handleRegister = async () => {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   position: relative;
   overflow: hidden;
-  font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family:
+    'SF Pro Display',
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
   padding: 40px 20px;
 }
 
@@ -210,9 +214,9 @@ const handleRegister = async () => {
 .grid-overlay {
   position: absolute;
   inset: 0;
-  background-image: 
-    linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px);
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
   background-size: 50px 50px;
   animation: gridMove 20s linear infinite;
 }
@@ -250,7 +254,8 @@ const handleRegister = async () => {
 }
 
 @keyframes float {
-  0%, 100% {
+  0%,
+  100% {
     transform: translate(0, 0);
   }
   50% {
@@ -283,7 +288,7 @@ const handleRegister = async () => {
   backdrop-filter: blur(20px);
   border-radius: 24px;
   padding: 40px;
-  box-shadow: 
+  box-shadow:
     0 20px 60px rgba(0, 0, 0, 0.3),
     0 0 0 1px rgba(255, 255, 255, 0.1) inset;
   position: relative;
@@ -451,7 +456,7 @@ const handleRegister = async () => {
     left: 0;
     margin-bottom: 16px;
   }
-  
+
   .header {
     padding-top: 0;
   }

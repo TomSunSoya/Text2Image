@@ -69,9 +69,7 @@
         <!-- 注册链接 -->
         <div class="footer">
           <span class="footer-text">还没有账号？</span>
-          <router-link to="/register" class="register-link">
-            立即注册
-          </router-link>
+          <router-link to="/register" class="register-link"> 立即注册 </router-link>
         </div>
       </div>
     </div>
@@ -79,54 +77,54 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
-import { useAuthStore } from '@/stores/auth'
-import { Picture, User, Lock } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive } from 'vue';
+import { useAuthStore } from '@/stores/auth';
+import { Picture, User, Lock } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 
-const authStore = useAuthStore()
-const loginFormRef = ref(null)
-const rememberMe = ref(false)
+const authStore = useAuthStore();
+const loginFormRef = ref(null);
+const rememberMe = ref(false);
 
 const loginForm = reactive({
   username: '',
-  password: ''
-})
+  password: '',
+});
 
 const rules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 20, message: '用户名长度应在 3-20 个字符', trigger: 'blur' }
+    { min: 3, max: 20, message: '用户名长度应在 3-20 个字符', trigger: 'blur' },
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码长度至少 6 个字符', trigger: 'blur' }
-  ]
-}
+    { min: 6, message: '密码长度至少 6 个字符', trigger: 'blur' },
+  ],
+};
 
 const handleLogin = async () => {
   try {
-    await loginFormRef.value.validate()
-    await authStore.login(loginForm)
-    
+    await loginFormRef.value.validate();
+    await authStore.login(loginForm);
+
     // 如果勾选记住我，保存用户名
     if (rememberMe.value) {
-      localStorage.setItem('savedUsername', loginForm.username)
+      localStorage.setItem('savedUsername', loginForm.username);
     } else {
-      localStorage.removeItem('savedUsername')
+      localStorage.removeItem('savedUsername');
     }
   } catch (error) {
     if (error !== false) {
-      console.error('Login failed:', error)
+      console.error('Login failed:', error);
     }
   }
-}
+};
 
 // 自动填充已保存的用户名
-const savedUsername = localStorage.getItem('savedUsername')
+const savedUsername = localStorage.getItem('savedUsername');
 if (savedUsername) {
-  loginForm.username = savedUsername
-  rememberMe.value = true
+  loginForm.username = savedUsername;
+  rememberMe.value = true;
 }
 </script>
 
@@ -139,7 +137,11 @@ if (savedUsername) {
   background: linear-gradient(135deg, #1e3c72 0%, #2a5298 50%, #7e22ce 100%);
   position: relative;
   overflow: hidden;
-  font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family:
+    'SF Pro Display',
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
 }
 
 /* 背景装饰 */
@@ -184,7 +186,8 @@ if (savedUsername) {
 }
 
 @keyframes float {
-  0%, 100% {
+  0%,
+  100% {
     transform: translate(0, 0) rotate(0deg);
   }
   33% {
@@ -221,7 +224,7 @@ if (savedUsername) {
   backdrop-filter: blur(20px);
   border-radius: 24px;
   padding: 48px 40px;
-  box-shadow: 
+  box-shadow:
     0 20px 60px rgba(0, 0, 0, 0.3),
     0 0 0 1px rgba(255, 255, 255, 0.1) inset;
 }
@@ -243,7 +246,8 @@ if (savedUsername) {
 }
 
 @keyframes pulse {
-  0%, 100% {
+  0%,
+  100% {
     transform: scale(1);
   }
   50% {
