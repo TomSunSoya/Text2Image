@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include <spdlog/spdlog.h>
+
 #ifdef _WIN32
 #include <Windows.h>
 #else
@@ -215,12 +217,13 @@ nlohmann::json loadConfig(const std::string& path)
         return config;
     }
 
-    std::string message = std::format("failed to open config file: {} (tried:", effectivePath);
+    std::string triedList;
     for (const auto& p : tried) {
-        message += std::format(" {}", p.string());
+        triedList += std::format(" {}", p.string());
     }
-    message += ")";
-    throw std::runtime_error(message);
+    spdlog::warn("loadConfig: no config file found for '{}'; paths tried:{}", effectivePath, triedList);
+    throw std::runtime_error(
+        std::format("failed to open config file: {} (tried:{})", effectivePath, triedList));
 }
 
 const nlohmann::json& cachedConfig()
