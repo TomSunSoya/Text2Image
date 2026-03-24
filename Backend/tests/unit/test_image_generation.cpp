@@ -49,6 +49,14 @@ TEST(ImageGeneration_FromJson, CamelCaseKeys) {
     EXPECT_EQ(gen.worker_id, "w-1");
 }
 
+TEST(ImageGeneration_FromJson, IgnoresBase64Fields) {
+    nlohmann::json j = {{"image_base64", "abc123"}, {"imageBase64", "xyz456"}};
+
+    auto gen = models::ImageGeneration::fromJson(j);
+    EXPECT_TRUE(gen.image_bytes.empty());
+    EXPECT_TRUE(gen.image_url.empty());
+}
+
 TEST(ImageGeneration_FromJson, MissingOptionalFields) {
     nlohmann::json j = {{"prompt", "hello"}};
     auto gen = models::ImageGeneration::fromJson(j);
@@ -77,7 +85,7 @@ TEST(ImageGeneration_ToJson, BasicFields) {
     gen.height = 512;
     gen.width = 768;
 
-    auto j = gen.toJson(false);
+    auto j = gen.toJson();
     EXPECT_EQ(j.at("id"), 42);
     EXPECT_EQ(j.at("taskId"), 42);
     EXPECT_EQ(j.at("requestId"), "req-abc");
@@ -91,7 +99,7 @@ TEST(ImageGeneration_ToJson, BasicFields) {
 TEST(ImageGeneration_ToJson, SeedIncludedWhenPresent) {
     models::ImageGeneration gen;
     gen.seed = 99;
-    auto j = gen.toJson(false);
+    auto j = gen.toJson();
     EXPECT_TRUE(j.contains("seed"));
     EXPECT_EQ(j.at("seed"), 99);
 }
@@ -99,36 +107,21 @@ TEST(ImageGeneration_ToJson, SeedIncludedWhenPresent) {
 TEST(ImageGeneration_ToJson, SeedExcludedWhenAbsent) {
     models::ImageGeneration gen;
     gen.seed = std::nullopt;
-    auto j = gen.toJson(false);
+    auto j = gen.toJson();
     EXPECT_FALSE(j.contains("seed"));
 }
 
-TEST(ImageGeneration_ToJson, IncludeImagePayloadTrue) {
+TEST(ImageGeneration_ToJson, NeverIncludesImageBase64) {
     models::ImageGeneration gen;
-    gen.image_base64 = "abc123base64";
-    auto j = gen.toJson(true);
-    EXPECT_TRUE(j.contains("imageBase64"));
-    EXPECT_EQ(j.at("imageBase64"), "abc123base64");
-}
-
-TEST(ImageGeneration_ToJson, IncludeImagePayloadFalse) {
-    models::ImageGeneration gen;
-    gen.image_base64 = "abc123base64";
-    auto j = gen.toJson(false);
-    EXPECT_FALSE(j.contains("imageBase64"));
-}
-
-TEST(ImageGeneration_ToJson, EmptyBase64NotIncludedEvenWhenTrue) {
-    models::ImageGeneration gen;
-    gen.image_base64 = "";
-    auto j = gen.toJson(true);
+    gen.image_bytes = "raw-png-bytes";
+    auto j = gen.toJson();
     EXPECT_FALSE(j.contains("imageBase64"));
 }
 
 TEST(ImageGeneration_ToJson, OptionalTimesIncludedWhenSet) {
     models::ImageGeneration gen;
     gen.completed_at = std::chrono::system_clock::now();
-    auto j = gen.toJson(false);
+    auto j = gen.toJson();
     EXPECT_TRUE(j.contains("completedAt"));
 }
 
@@ -137,7 +130,7 @@ TEST(ImageGeneration_ToJson, OptionalTimesExcludedWhenUnset) {
     gen.completed_at = std::nullopt;
     gen.started_at = std::nullopt;
     gen.cancelled_at = std::nullopt;
-    auto j = gen.toJson(false);
+    auto j = gen.toJson();
     EXPECT_FALSE(j.contains("completedAt"));
     EXPECT_FALSE(j.contains("startedAt"));
     EXPECT_FALSE(j.contains("cancelledAt"));

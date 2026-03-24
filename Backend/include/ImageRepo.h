@@ -40,14 +40,6 @@ class ImageRepo {
     bool updateStatusAndError(int64_t id, int64_t userId, const std::string& status,
                               const std::string& errorMessage = std::string{});
 
-    bool updateGenerationResult(
-        int64_t id, int64_t userId, const std::string& status, const std::string& imageUrl,
-        const std::string& imageBase64, const std::string& errorMessage, double generationTime,
-        const std::string& failureCode = std::string{},
-        const std::string& thumbnailUrl = std::string{},
-        const std::string& storageKey = std::string{},
-        const std::optional<std::chrono::system_clock::time_point>& completedAt = std::nullopt);
-
   private:
     static void ensureTable();
 };

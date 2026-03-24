@@ -20,11 +20,11 @@ namespace {
 constexpr const char* kColumns =
     "id, user_id, request_id, prompt, negative_prompt, num_steps, "
     "height, width, seed, status, retry_count, max_retries, failure_code, "
-    "worker_id, image_url, thumbnail_url, storage_key, image_base64, "
-    "error_message, generation_time, created_at, started_at, completed_at, "
-    "cancelled_at, lease_expires_at";
+    "worker_id, image_url, thumbnail_url, storage_key, error_message, "
+    "generation_time, created_at, started_at, completed_at, cancelled_at, "
+    "lease_expires_at";
 
-constexpr int kColumnCount = 25;
+constexpr int kColumnCount = 24;
 
 constexpr const char* kImageTable = "image_generations";
 
@@ -153,29 +153,28 @@ models::ImageGeneration rowToImageGeneration(const mysqlx::Row& row) {
     image.image_url = getStringOrEmpty(row, 14);
     image.thumbnail_url = getStringOrEmpty(row, 15);
     image.storage_key = getStringOrEmpty(row, 16);
-    image.image_base64 = getStringOrEmpty(row, 17);
-    image.error_message = getStringOrEmpty(row, 18);
-    image.generation_time = getDoubleOrDefault(row, 19, 0.0);
+    image.error_message = getStringOrEmpty(row, 17);
+    image.generation_time = getDoubleOrDefault(row, 18, 0.0);
 
-    if (const auto createdAt = parseDbTime(getStringOrEmpty(row, 20))) {
+    if (const auto createdAt = parseDbTime(getStringOrEmpty(row, 19))) {
         image.created_at = *createdAt;
     } else {
         image.created_at = std::chrono::system_clock::now();
     }
 
-    if (const auto startedAt = parseDbTime(getStringOrEmpty(row, 21))) {
+    if (const auto startedAt = parseDbTime(getStringOrEmpty(row, 20))) {
         image.started_at = startedAt;
     }
 
-    if (const auto completedAt = parseDbTime(getStringOrEmpty(row, 22))) {
+    if (const auto completedAt = parseDbTime(getStringOrEmpty(row, 21))) {
         image.completed_at = completedAt;
     }
 
-    if (const auto cancelledAt = parseDbTime(getStringOrEmpty(row, 23))) {
+    if (const auto cancelledAt = parseDbTime(getStringOrEmpty(row, 22))) {
         image.cancelled_at = cancelledAt;
     }
 
-    if (const auto leaseExpiresAt = parseDbTime(getStringOrEmpty(row, 24))) {
+    if (const auto leaseExpiresAt = parseDbTime(getStringOrEmpty(row, 23))) {
         image.lease_expires_at = leaseExpiresAt;
     }
 
@@ -263,7 +262,6 @@ void ImageRepo::ensureTable() {
                     image_url VARCHAR(500) DEFAULT NULL,
                     thumbnail_url VARCHAR(500) DEFAULT NULL,
                     storage_key VARCHAR(255) DEFAULT NULL,
-                    image_base64 LONGTEXT DEFAULT NULL,
                     error_message TEXT DEFAULT NULL,
                     generation_time DOUBLE DEFAULT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -337,16 +335,16 @@ int64_t ImageRepo::insert(const models::ImageGeneration& generation) {
         .sql("INSERT INTO " + imageTableName() + R"(
             (user_id, request_id, prompt, negative_prompt, num_steps, height, width,
              seed, status, retry_count, max_retries, failure_code, worker_id, image_url,
-             thumbnail_url, storage_key, image_base64, error_message, generation_time,
+             thumbnail_url, storage_key, error_message, generation_time,
              created_at, started_at, completed_at, cancelled_at, lease_expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         )")
         .bind(generation.user_id, generation.request_id, generation.prompt,
               generation.negative_prompt, generation.num_steps, generation.height, generation.width,
               seedValue, generation.status, generation.retry_count, generation.max_retries,
               generation.failure_code, generation.worker_id, generation.image_url,
-              generation.thumbnail_url, generation.storage_key, generation.image_base64,
-              generation.error_message, generation.generation_time, timeToDbString(createdAt),
+              generation.thumbnail_url, generation.storage_key, generation.error_message,
+              generation.generation_time, timeToDbString(createdAt),
               optionalTimeToValue(generation.started_at),
               optionalTimeToValue(generation.completed_at),
               optionalTimeToValue(generation.cancelled_at),
@@ -542,14 +540,13 @@ bool ImageRepo::finishClaimedTask(const models::ImageGeneration& generation) {
     auto result =
         database::DBManager::threadSession()
             .sql("UPDATE " + imageTableName() +
-                 " SET status = ?, image_url = ?, image_base64 = ?, error_message = ?, "
-                 "generation_time = ?, completed_at = ?, cancelled_at = ?,"
+                 " SET status = ?, image_url = ?, error_message = ?, generation_time = ?, "
+                 "completed_at = ?, cancelled_at = ?,"
                  " failure_code = ?, thumbnail_url = ?, storage_key = ?, lease_expires_at = NULL, "
                  "worker_id = NULL "
                  " WHERE id = ? AND user_id = ? AND status = 'generating' AND worker_id = ?")
-            .bind(generation.status, generation.image_url, generation.image_base64,
-                  generation.error_message, generation.generation_time,
-                  optionalTimeToValue(generation.completed_at),
+            .bind(generation.status, generation.image_url, generation.error_message,
+                  generation.generation_time, optionalTimeToValue(generation.completed_at),
                   optionalTimeToValue(generation.cancelled_at), generation.failure_code,
                   generation.thumbnail_url, generation.storage_key, generation.id,
                   generation.user_id)
@@ -599,8 +596,8 @@ bool ImageRepo::retryByIdAndUserId(int64_t id, int64_t userId, models::ImageGene
                       .sql("UPDATE " + imageTableName() +
                            " SET status = 'queued', retry_count = retry_count + 1, failure_code = "
                            "'', error_message = '', "
-                           " image_url = '', thumbnail_url = '', storage_key = '', image_base64 = "
-                           "'', generation_time = 0, "
+                           " image_url = '', thumbnail_url = '', storage_key = '', "
+                           " generation_time = 0, "
                            " worker_id = NULL, lease_expires_at = NULL, started_at = NULL, "
                            "completed_at = NULL, cancelled_at = NULL "
                            " WHERE id = ? AND user_id = ? AND status IN ('failed', 'timeout', "
@@ -676,30 +673,6 @@ bool ImageRepo::updateStatusAndError(int64_t id, int64_t userId, const std::stri
                 " SET status = ?, error_message = ?, completed_at = ? WHERE id = ? AND user_id = ?")
             .bind(status, errorMessage, completedAt, id, userId)
             .execute();
-
-    return result.getAffectedItemsCount() > 0;
-}
-
-bool ImageRepo::updateGenerationResult(
-    int64_t id, int64_t userId, const std::string& status, const std::string& imageUrl,
-    const std::string& imageBase64, const std::string& errorMessage, double generationTime,
-    const std::string& failureCode, const std::string& thumbnailUrl, const std::string& storageKey,
-    const std::optional<std::chrono::system_clock::time_point>& completedAt) {
-    ensureTable();
-
-    mysqlx::Value completedAtValue = completedAt.has_value()
-                                         ? mysqlx::Value(timeToDbString(completedAt.value()))
-                                         : mysqlx::Value();
-
-    auto result = database::DBManager::threadSession()
-                      .sql("UPDATE " + imageTableName() +
-                           " SET status = ?, image_url = ?, image_base64 = ?, error_message = ?, "
-                           " generation_time = ?, failure_code = ?, thumbnail_url = ?, storage_key "
-                           "= ?, completed_at = ?"
-                           " WHERE id = ? AND user_id = ?")
-                      .bind(status, imageUrl, imageBase64, errorMessage, generationTime,
-                            failureCode, thumbnailUrl, storageKey, completedAtValue, id, userId)
-                      .execute();
 
     return result.getAffectedItemsCount() > 0;
 }

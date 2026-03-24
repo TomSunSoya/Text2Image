@@ -15,7 +15,6 @@
 
 #include "Backend.h"
 #include "ImageRepo.h"
-#include "base64_utils.h"
 #include "client.h"
 #include "image_storage.h"
 #include "task_event_hub.h"
@@ -165,14 +164,14 @@ std::string buildRequestId() {
     return std::format("img-{}-{:x}", millis, rand);
 }
 
-std::string downloadImageAsBase64(const std::string& url, long timeoutSeconds) {
+std::string downloadImageBytes(const std::string& url, long timeoutSeconds) {
     HttpClient client(timeoutSeconds);
     auto response = client.get(url, {}, true);
     if (!response.ok() || response.body.empty()) {
         return {};
     }
 
-    return utils::encodeToBase64(response.body);
+    return response.body;
 }
 
 std::string toLower(std::string value) {
@@ -225,9 +224,6 @@ void mergeRemoteResult(const nlohmann::json& remoteJson, models::ImageGeneration
     if (!remoteGeneration.image_url.empty()) {
         generation.image_url = remoteGeneration.image_url;
     }
-    if (!remoteGeneration.image_base64.empty()) {
-        generation.image_base64 = remoteGeneration.image_base64;
-    }
     if (!remoteGeneration.error_message.empty()) {
         generation.error_message = remoteGeneration.error_message;
     }
@@ -243,16 +239,10 @@ void mergeRemoteResult(const nlohmann::json& remoteJson, models::ImageGeneration
         }
     }
 
-    if (generation.image_base64.empty()) {
-        if (const auto imageBase64 = getStringField(*payload, "image_base64")) {
-            generation.image_base64 = *imageBase64;
-        } else if (const auto base64 = getStringField(*payload, "base64")) {
-            generation.image_base64 = *base64;
-        } else if (const auto image = getStringField(*payload, "image")) {
+    if (generation.image_url.empty()) {
+        if (const auto image = getStringField(*payload, "image")) {
             if (image->starts_with("http://") || image->starts_with("https://")) {
                 generation.image_url = *image;
-            } else {
-                generation.image_base64 = *image;
             }
         }
     }
@@ -320,18 +310,17 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation) 
         spdlog::error("ImageService async unknown exception");
     }
 
-    if (generation.image_base64.empty() && !generation.image_url.empty()) {
+    if (!generation.image_url.empty()) {
         const bool isAbsoluteHttpUrl = generation.image_url.starts_with("http://") ||
                                        generation.image_url.starts_with("https://");
         if (!isAbsoluteHttpUrl && !serviceUrl.empty() && generation.image_url.starts_with("/")) {
             generation.image_url = serviceUrl + generation.image_url;
         }
-        generation.image_base64 = downloadImageAsBase64(generation.image_url, timeoutSeconds);
+        generation.image_bytes = downloadImageBytes(generation.image_url, timeoutSeconds);
     }
 
     generation.status = normalizeStatus(generation.status);
-    if ((!generation.image_base64.empty() || !generation.image_url.empty()) &&
-        generation.status != "failed") {
+    if (!generation.image_bytes.empty() && generation.status != "failed") {
         generation.status = "success";
         generation.failure_code.clear();
         generation.error_message.clear();
@@ -357,21 +346,21 @@ void persistGeneratedImage(models::ImageGeneration& generation) {
         return;
     }
 
-    if (generation.image_base64.empty()) {
+    if (generation.image_bytes.empty()) {
         generation.status = "failed";
         generation.failure_code = "missing_image_payload";
-        generation.error_message = "generation succeeded but image payload is missing";
+        generation.error_message = "generation succeeded but image binary is missing";
         generation.completed_at = Clock::now();
         return;
     }
 
     try {
-        const auto rawBytes = utils::decodeBase64(generation.image_base64);
         ImageStorage storage;
-        const auto stored = storage.store(generation.user_id, generation.request_id, rawBytes);
+        const auto stored =
+            storage.store(generation.user_id, generation.request_id, generation.image_bytes);
         generation.storage_key = stored.storage_key;
         generation.image_url = std::format("/api/images/{}/binary", generation.id);
-        generation.image_base64.clear();
+        generation.image_bytes.clear();
     } catch (const std::exception& ex) {
         generation.status = "failed";
         generation.failure_code = "storage_write_failed";
@@ -379,7 +368,7 @@ void persistGeneratedImage(models::ImageGeneration& generation) {
             std::format("generation succeeded but failed to store image: {}", ex.what());
         generation.completed_at = Clock::now();
         generation.storage_key.clear();
-        generation.image_base64.clear();
+        generation.image_bytes.clear();
         generation.image_url.clear();
     }
 }
@@ -567,7 +556,7 @@ ImageService::create(int64_t userId, const nlohmann::json& payload) const {
     generation.error_message.clear();
     generation.completed_at = std::nullopt;
     generation.image_url.clear();
-    generation.image_base64.clear();
+    generation.image_bytes.clear();
     generation.generation_time = 0;
 
     try {
@@ -649,7 +638,6 @@ std::expected<ImageGetResult, ServiceError> ImageService::getById(int64_t userId
                 ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
         }
 
-        image->image_base64.clear();
         if (includeImagePayload && !image->storage_key.empty()) {
             try {
                 ImageStorage storage;

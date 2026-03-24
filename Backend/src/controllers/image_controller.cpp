@@ -27,9 +27,7 @@ int parsePositiveInt(const std::string& value, int fallback) {
 nlohmann::json toListJson(const ImageListResult& result) {
     nlohmann::json content = nlohmann::json::array();
     for (const auto& item : result.content) {
-        auto summary = item.toJson();
-        summary.erase("imageBase64");
-        content.push_back(summary);
+        content.push_back(item.toJson());
     }
 
     return {{"content", content}, {"totalElements", result.total_elements}};
@@ -66,11 +64,6 @@ nlohmann::json toStatusJson(const models::ImageGeneration& generation) {
     if (full.contains("imageUrl") && full.at("imageUrl").is_string() &&
         !full.at("imageUrl").get<std::string>().empty()) {
         body["imageUrl"] = full.at("imageUrl");
-    }
-
-    if (full.contains("imageBase64") && full.at("imageBase64").is_string() &&
-        !full.at("imageBase64").get<std::string>().empty()) {
-        body["imageBase64"] = full.at("imageBase64");
     }
 
     return body;
@@ -164,7 +157,7 @@ void ImageController::create(const drogon::HttpRequestPtr& req,
         }
 
         resp->setStatusCode(drogon::k202Accepted);
-        resp->setBody(result->generation.toJson(false).dump());
+        resp->setBody(result->generation.toJson().dump());
         callback(resp);
     } catch (const json::parse_error& e) {
         spdlog::error("ImageController::create parse error: {}", e.what());
@@ -354,7 +347,7 @@ void ImageController::cancelById(const drogon::HttpRequestPtr& req,
     }
 
     resp->setStatusCode(drogon::k200OK);
-    resp->setBody(result->generation.toJson(false).dump());
+    resp->setBody(result->generation.toJson().dump());
     callback(resp);
 }
 
