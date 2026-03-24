@@ -23,6 +23,7 @@ class DBManager {
 public:
 	static void init(const MysqlConfig& cfg);
 	static const MysqlConfig& config();
+	static bool isHealthy();
 	static mysqlx::Session& session();
 	static mysqlx::Session& threadSession();
 	static mysqlx::Schema schema();

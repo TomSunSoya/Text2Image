@@ -66,6 +66,33 @@ const MysqlConfig& DBManager::config()
 	return g_cfg;
 }
 
+bool DBManager::isHealthy()
+{
+	if (g_cfg.host.empty() || g_cfg.database.empty()) {
+		return false;
+	}
+
+	try {
+		if (!g_sess) {
+			g_sess = createSession(g_cfg);
+		}
+
+		g_sess->sql("SELECT 1").execute();
+		g_sess->getSchema(g_cfg.database, true);
+		return true;
+	} catch (const mysqlx::Error&) {
+		try {
+			g_sess = createSession(g_cfg);
+			g_sess->sql("SELECT 1").execute();
+			g_sess->getSchema(g_cfg.database, true);
+			return true;
+		} catch (const mysqlx::Error&) {
+			g_sess.reset();
+			return false;
+		}
+	}
+}
+
 mysqlx::Session& DBManager::session() {
 	if (!g_sess) throw std::runtime_error("DB not initialized");
 	return *g_sess;
