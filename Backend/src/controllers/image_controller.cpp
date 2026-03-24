@@ -11,8 +11,7 @@
 
 namespace {
 
-int parsePositiveInt(const std::string& value, int fallback)
-{
+int parsePositiveInt(const std::string& value, int fallback) {
     if (value.empty()) {
         return fallback;
     }
@@ -25,8 +24,7 @@ int parsePositiveInt(const std::string& value, int fallback)
     }
 }
 
-nlohmann::json toListJson(const ImageListResult& result)
-{
+nlohmann::json toListJson(const ImageListResult& result) {
     nlohmann::json content = nlohmann::json::array();
     for (const auto& item : result.content) {
         auto summary = item.toJson();
@@ -34,27 +32,22 @@ nlohmann::json toListJson(const ImageListResult& result)
         content.push_back(summary);
     }
 
-    return {
-        {"content", content},
-        {"totalElements", result.total_elements}
-    };
+    return {{"content", content}, {"totalElements", result.total_elements}};
 }
 
-nlohmann::json toStatusJson(const models::ImageGeneration& generation)
-{
+nlohmann::json toStatusJson(const models::ImageGeneration& generation) {
     const auto full = generation.toJson();
 
     nlohmann::json body = {
-        {"id", full.at("id")},
-        {"requestId", full.at("requestId")},
-        {"status", full.at("status")}
-    };
+        {"id", full.at("id")}, {"requestId", full.at("requestId")}, {"status", full.at("status")}};
 
-    if (full.contains("errorMessage") && full.at("errorMessage").is_string() && !full.at("errorMessage").get<std::string>().empty()) {
+    if (full.contains("errorMessage") && full.at("errorMessage").is_string() &&
+        !full.at("errorMessage").get<std::string>().empty()) {
         body["errorMessage"] = full.at("errorMessage");
     }
 
-    if (full.contains("failureCode") && full.at("failureCode").is_string() && !full.at("failureCode").get<std::string>().empty()) {
+    if (full.contains("failureCode") && full.at("failureCode").is_string() &&
+        !full.at("failureCode").get<std::string>().empty()) {
         body["failureCode"] = full.at("failureCode");
     }
 
@@ -70,34 +63,31 @@ nlohmann::json toStatusJson(const models::ImageGeneration& generation)
         body["completedAt"] = full.at("completedAt");
     }
 
-    if (full.contains("imageUrl") && full.at("imageUrl").is_string() && !full.at("imageUrl").get<std::string>().empty()) {
+    if (full.contains("imageUrl") && full.at("imageUrl").is_string() &&
+        !full.at("imageUrl").get<std::string>().empty()) {
         body["imageUrl"] = full.at("imageUrl");
     }
 
-    if (full.contains("imageBase64") && full.at("imageBase64").is_string() && !full.at("imageBase64").get<std::string>().empty()) {
+    if (full.contains("imageBase64") && full.at("imageBase64").is_string() &&
+        !full.at("imageBase64").get<std::string>().empty()) {
         body["imageBase64"] = full.at("imageBase64");
     }
 
     return body;
 }
 
-void fillServiceError(const drogon::HttpResponsePtr& resp, const ServiceError& error)
-{
+void fillServiceError(const drogon::HttpResponsePtr& resp, const ServiceError& error) {
     resp->setStatusCode(error.status);
     resp->setBody(nlohmann::json{{"error", error.toJson()}}.dump());
 }
 
-void fillDirectError(const drogon::HttpResponsePtr& resp,
-                     drogon::HttpStatusCode status,
-                     std::string code,
-                     std::string message)
-{
+void fillDirectError(const drogon::HttpResponsePtr& resp, drogon::HttpStatusCode status,
+                     std::string code, std::string message) {
     fillServiceError(resp, ServiceError{status, std::move(code), std::move(message)});
 }
 
 std::optional<int64_t> resolveUserId(const drogon::HttpRequestPtr& req,
-                                     const drogon::HttpResponsePtr& resp)
-{
+                                     const drogon::HttpResponsePtr& resp) {
     // Fast path: JwtMiddleware already verified the token and stored userId
     // in request attributes — no need to re-parse the JWT.
     const auto& attrs = req->attributes();
@@ -115,7 +105,8 @@ std::optional<int64_t> resolveUserId(const drogon::HttpRequestPtr& req,
     // Fallback: parse token ourselves (for unfiltered routes).
     const auto token = utils::extractBearerToken(req);
     if (!token) {
-        fillDirectError(resp, drogon::k401Unauthorized, "missing_bearer_token", "missing bearer token");
+        fillDirectError(resp, drogon::k401Unauthorized, "missing_bearer_token",
+                        "missing bearer token");
         return std::nullopt;
     }
 
@@ -131,18 +122,14 @@ std::optional<int64_t> resolveUserId(const drogon::HttpRequestPtr& req,
 } // namespace
 
 void ImageController::checkHealth(const drogon::HttpRequestPtr&,
-                                  std::function<void(const drogon::HttpResponsePtr&)>&& callback)
-{
+                                  std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
     auto resp = drogon::HttpResponse::newHttpResponse();
     resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
 
     ImageService service;
     const auto health = service.checkHealth();
 
-    nlohmann::json body = {
-        {"status", health.status},
-        {"modelLoaded", health.model_loaded}
-    };
+    nlohmann::json body = {{"status", health.status}, {"modelLoaded", health.model_loaded}};
     if (!health.detail.empty()) {
         body["detail"] = health.detail;
     }
@@ -153,8 +140,7 @@ void ImageController::checkHealth(const drogon::HttpRequestPtr&,
 }
 
 void ImageController::create(const drogon::HttpRequestPtr& req,
-                             std::function<void(const drogon::HttpResponsePtr&)>&& callback)
-{
+                             std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
     using nlohmann::json;
 
     auto resp = drogon::HttpResponse::newHttpResponse();
@@ -192,8 +178,7 @@ void ImageController::create(const drogon::HttpRequestPtr& req,
 }
 
 void ImageController::listMy(const drogon::HttpRequestPtr& req,
-                             std::function<void(const drogon::HttpResponsePtr&)>&& callback)
-{
+                             std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
     auto resp = drogon::HttpResponse::newHttpResponse();
     resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
 
@@ -221,8 +206,7 @@ void ImageController::listMy(const drogon::HttpRequestPtr& req,
 
 void ImageController::listMyByStatus(const drogon::HttpRequestPtr& req,
                                      std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-                                     const std::string& status)
-{
+                                     const std::string& status) {
     auto resp = drogon::HttpResponse::newHttpResponse();
     resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
 
@@ -250,8 +234,7 @@ void ImageController::listMyByStatus(const drogon::HttpRequestPtr& req,
 
 void ImageController::getById(const drogon::HttpRequestPtr& req,
                               std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-                              int64_t id)
-{
+                              int64_t id) {
     auto resp = drogon::HttpResponse::newHttpResponse();
     resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
 
@@ -276,8 +259,7 @@ void ImageController::getById(const drogon::HttpRequestPtr& req,
 
 void ImageController::getBinaryById(const drogon::HttpRequestPtr& req,
                                     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-                                    int64_t id)
-{
+                                    int64_t id) {
     auto resp = drogon::HttpResponse::newHttpResponse();
     resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
 
@@ -303,8 +285,7 @@ void ImageController::getBinaryById(const drogon::HttpRequestPtr& req,
 
 void ImageController::getStatusById(const drogon::HttpRequestPtr& req,
                                     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-                                    int64_t id)
-{
+                                    int64_t id) {
     auto resp = drogon::HttpResponse::newHttpResponse();
     resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
 
@@ -329,8 +310,7 @@ void ImageController::getStatusById(const drogon::HttpRequestPtr& req,
 
 void ImageController::deleteById(const drogon::HttpRequestPtr& req,
                                  std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-                                 int64_t id)
-{
+                                 int64_t id) {
     auto resp = drogon::HttpResponse::newHttpResponse();
     resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
 
@@ -353,52 +333,52 @@ void ImageController::deleteById(const drogon::HttpRequestPtr& req,
     callback(resp);
 }
 
-void ImageController::cancelById(const drogon::HttpRequestPtr& req, std::function<void(const drogon::HttpResponsePtr&)>&& callback, int64_t id)
-{
-	auto resp = drogon::HttpResponse::newHttpResponse();
-	resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+void ImageController::cancelById(const drogon::HttpRequestPtr& req,
+                                 std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                                 int64_t id) {
+    auto resp = drogon::HttpResponse::newHttpResponse();
+    resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
 
-	const auto userId = resolveUserId(req, resp);
-    if (!userId) {
-        callback(resp);
-        return;
-	}
-
-	ImageService service;
-	auto result = service.cancelById(*userId, id);
-	if (!result) {
-        fillServiceError(resp, result.error());
-        callback(resp);
-        return;
-    }
-
-	resp->setStatusCode(drogon::k200OK);
-	resp->setBody(result->generation.toJson(false).dump());
-    callback(resp);
-}
-
-void ImageController::retryById(const drogon::HttpRequestPtr & req, std::function<void(const drogon::HttpResponsePtr&)> && callback, int64_t id)
-{
-	auto resp = drogon::HttpResponse::newHttpResponse();
-	resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
-
-	const auto userId = resolveUserId(req, resp);
+    const auto userId = resolveUserId(req, resp);
     if (!userId) {
         callback(resp);
         return;
     }
 
-	ImageService service;
-	auto result = service.retryById(*userId, id);
-	if (!result) {
+    ImageService service;
+    auto result = service.cancelById(*userId, id);
+    if (!result) {
         fillServiceError(resp, result.error());
         callback(resp);
         return;
     }
 
-	resp->setStatusCode(drogon::k200OK);
-	resp->setBody(result->generation.toJson().dump());
+    resp->setStatusCode(drogon::k200OK);
+    resp->setBody(result->generation.toJson(false).dump());
     callback(resp);
 }
 
+void ImageController::retryById(const drogon::HttpRequestPtr& req,
+                                std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                                int64_t id) {
+    auto resp = drogon::HttpResponse::newHttpResponse();
+    resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
 
+    const auto userId = resolveUserId(req, resp);
+    if (!userId) {
+        callback(resp);
+        return;
+    }
+
+    ImageService service;
+    auto result = service.retryById(*userId, id);
+    if (!result) {
+        fillServiceError(resp, result.error());
+        callback(resp);
+        return;
+    }
+
+    resp->setStatusCode(drogon::k200OK);
+    resp->setBody(result->generation.toJson().dump());
+    callback(resp);
+}

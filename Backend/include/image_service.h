@@ -25,7 +25,7 @@ struct ImageGetResult {
 
 struct ImageBinaryResult {
     std::string body;
-    std::string content_type{ "image/png" };
+    std::string content_type{"image/png"};
 };
 
 struct ImageHealthResult {
@@ -35,16 +35,15 @@ struct ImageHealthResult {
 };
 
 class ImageService {
-public:
-	static void bootstrapWorkers();
+  public:
+    static void bootstrapWorkers();
 
     std::expected<ImageCreateResult, ServiceError> create(int64_t userId,
                                                           const nlohmann::json& payload) const;
 
     std::expected<ImageListResult, ServiceError> listMy(int64_t userId, int page, int size) const;
-    std::expected<ImageListResult, ServiceError> listMyByStatus(int64_t userId,
-                                                                const std::string& status,
-                                                                int page, int size) const;
+    std::expected<ImageListResult, ServiceError>
+    listMyByStatus(int64_t userId, const std::string& status, int page, int size) const;
 
     std::expected<ImageGetResult, ServiceError> getById(int64_t userId, int64_t id,
                                                         bool includeImagePayload = true) const;

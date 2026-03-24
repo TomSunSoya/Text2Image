@@ -6,16 +6,14 @@
 
 #include "auth_service.h"
 
-static void fillServiceError(const ServiceError& error, drogon::HttpResponsePtr& resp)
-{
+static void fillServiceError(const ServiceError& error, drogon::HttpResponsePtr& resp) {
     using nlohmann::json;
     resp->setStatusCode(error.status);
     resp->setBody(json{{"error", error.toJson()}}.dump());
 }
 
 void AuthController::registerUser(const drogon::HttpRequestPtr& req,
-                                  std::function<void(const drogon::HttpResponsePtr&)>&& callback)
-{
+                                  std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
     using nlohmann::json;
 
     auto resp = drogon::HttpResponse::newHttpResponse();
@@ -37,18 +35,20 @@ void AuthController::registerUser(const drogon::HttpRequestPtr& req,
         callback(resp);
     } catch (const json::parse_error& e) {
         spdlog::error("registerUser parse error: {}", e.what());
-        fillServiceError(ServiceError{drogon::k400BadRequest, "invalid_json_body", "invalid json body"}, resp);
+        fillServiceError(
+            ServiceError{drogon::k400BadRequest, "invalid_json_body", "invalid json body"}, resp);
         callback(resp);
     } catch (const std::exception& e) {
         spdlog::error("registerUser error: {}", e.what());
-        fillServiceError(ServiceError{drogon::k500InternalServerError, "internal_error", "internal error"}, resp);
+        fillServiceError(
+            ServiceError{drogon::k500InternalServerError, "internal_error", "internal error"},
+            resp);
         callback(resp);
     }
 }
 
 void AuthController::login(const drogon::HttpRequestPtr& req,
-                           std::function<void(const drogon::HttpResponsePtr&)>&& callback)
-{
+                           std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
     using nlohmann::json;
 
     auto resp = drogon::HttpResponse::newHttpResponse();
@@ -65,21 +65,21 @@ void AuthController::login(const drogon::HttpRequestPtr& req,
             return;
         }
 
-        json out{
-            {"token", result->token},
-            {"user", result->user.toJson()}
-        };
+        json out{{"token", result->token}, {"user", result->user.toJson()}};
 
         resp->setStatusCode(drogon::k200OK);
         resp->setBody(out.dump());
         callback(resp);
     } catch (const json::parse_error& e) {
         spdlog::error("login parse error: {}", e.what());
-        fillServiceError(ServiceError{drogon::k400BadRequest, "invalid_json_body", "invalid json body"}, resp);
+        fillServiceError(
+            ServiceError{drogon::k400BadRequest, "invalid_json_body", "invalid json body"}, resp);
         callback(resp);
     } catch (const std::exception& e) {
         spdlog::error("login error: {}", e.what());
-        fillServiceError(ServiceError{drogon::k500InternalServerError, "internal_error", "internal error"}, resp);
+        fillServiceError(
+            ServiceError{drogon::k500InternalServerError, "internal_error", "internal error"},
+            resp);
         callback(resp);
     }
 }

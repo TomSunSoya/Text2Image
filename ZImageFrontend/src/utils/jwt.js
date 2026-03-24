@@ -1,39 +1,39 @@
 export function decodeJwtPayload(token) {
   if (!token || typeof token !== 'string') {
-    return null
+    return null;
   }
 
-  const parts = token.split('.')
+  const parts = token.split('.');
   if (parts.length < 2) {
-    return null
+    return null;
   }
 
   try {
     if (typeof globalThis.atob !== 'function') {
-      return null
+      return null;
     }
 
     const normalized = parts[1]
       .replace(/-/g, '+')
       .replace(/_/g, '/')
-      .padEnd(Math.ceil(parts[1].length / 4) * 4, '=')
+      .padEnd(Math.ceil(parts[1].length / 4) * 4, '=');
 
-    return JSON.parse(globalThis.atob(normalized))
+    return JSON.parse(globalThis.atob(normalized));
   } catch {
-    return null
+    return null;
   }
 }
 
 export function isTokenExpired(token) {
-  const payload = decodeJwtPayload(token)
+  const payload = decodeJwtPayload(token);
   if (!payload || typeof payload.exp !== 'number') {
-    return false
+    return false;
   }
 
-  return payload.exp * 1000 <= Date.now()
+  return payload.exp * 1000 <= Date.now();
 }
 
 export function clearStoredAuth() {
-  localStorage.removeItem('token')
-  localStorage.removeItem('userInfo')
+  localStorage.removeItem('token');
+  localStorage.removeItem('userInfo');
 }

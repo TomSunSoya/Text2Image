@@ -39,8 +39,7 @@ def read_list_env(name: str, fallback: list[str]) -> list[str]:
 
 
 LOCAL_MODEL_PATH = os.getenv(
-    "MODEL_PATH",
-    "C:/Users/pc1/.cache/modelscope/hub/models/Tongyi-MAI/Z-Image-Turbo"
+    "MODEL_PATH", "C:/Users/pc1/.cache/modelscope/hub/models/Tongyi-MAI/Z-Image-Turbo"
 )
 PORT = read_int_env("MODEL_SERVICE_PORT", 8081)
 LOG_DIR = os.getenv("MODEL_SERVICE_LOG_DIR", "./logs")
@@ -59,8 +58,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.FileHandler(os.path.join(LOG_DIR, "model_service.log")),
-        logging.StreamHandler()
-    ]
+        logging.StreamHandler(),
+    ],
 )
 
 logger = logging.getLogger(__name__)
@@ -240,9 +239,7 @@ class ZImageModelService:
 
             try:
                 self.pipe = ZImagePipeline.from_pretrained(
-                    LOCAL_MODEL_PATH,
-                    torch_dtype=torch.bfloat16,
-                    local_files_only=True
+                    LOCAL_MODEL_PATH, torch_dtype=torch.bfloat16, local_files_only=True
                 ).to(DEVICE)
                 logger.info("Model loaded. Device: %s", DEVICE)
                 return True
@@ -272,7 +269,9 @@ class ZImageModelService:
                 if request.seed is not None:
                     generator = torch.Generator(device=DEVICE).manual_seed(request.seed)
 
-                logger.info("Generating image for request_id=%s prompt=%s", request_id, request.prompt[:50])
+                logger.info(
+                    "Generating image for request_id=%s prompt=%s", request_id, request.prompt[:50]
+                )
 
                 result = self.pipe(
                     prompt=request.prompt,
@@ -293,7 +292,11 @@ class ZImageModelService:
                 filepath = resolve_temp_file(filename)
                 image.save(filepath)
 
-                logger.info("Generated image successfully: request_id=%s, time=%s", request_id, generation_time)
+                logger.info(
+                    "Generated image successfully: request_id=%s, time=%s",
+                    request_id,
+                    generation_time,
+                )
 
                 return {
                     "status": "success",
@@ -400,6 +403,7 @@ async def get_temp_image(filename: str):
         raise HTTPException(status_code=404, detail="Image not found")
 
     from fastapi.responses import FileResponse
+
     return FileResponse(filepath, media_type="image/png")
 
 
@@ -424,5 +428,3 @@ async def cleanup_temp_files(max_age_hours: int = 24):
 if __name__ == "__main__":
     logger.info("Model service started, port: %s", PORT)
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
-
-

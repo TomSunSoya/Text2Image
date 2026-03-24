@@ -5,35 +5,28 @@
 #include "test_db_support.h"
 
 class AuthFlowTest : public ::testing::Test {
-protected:
-    void SetUp() override
-    {
+  protected:
+    void SetUp() override {
         test_support::ensureTestDatabase();
         test_support::cleanUsers();
     }
 
-    void TearDown() override
-    {
+    void TearDown() override {
         test_support::cleanUsers();
     }
 
-    static nlohmann::json makeRegPayload(const std::string& username,
-                                         const std::string& email,
-                                         const std::string& password = "pass123456")
-    {
-        return {
-            {"username", username},
-            {"email",    email},
-            {"password", password},
-            {"nickname", username}
-        };
+    static nlohmann::json makeRegPayload(const std::string& username, const std::string& email,
+                                         const std::string& password = "pass123456") {
+        return {{"username", username},
+                {"email", email},
+                {"password", password},
+                {"nickname", username}};
     }
 };
 
 // ==================== register ====================
 
-TEST_F(AuthFlowTest, RegisterSuccess)
-{
+TEST_F(AuthFlowTest, RegisterSuccess) {
     AuthService service;
     auto result = service.registerUser(makeRegPayload("alice", "alice@test.com"));
     ASSERT_TRUE(result.has_value());
@@ -41,8 +34,7 @@ TEST_F(AuthFlowTest, RegisterSuccess)
     EXPECT_EQ(result->user.username, "alice");
 }
 
-TEST_F(AuthFlowTest, RegisterDuplicateUsername)
-{
+TEST_F(AuthFlowTest, RegisterDuplicateUsername) {
     AuthService service;
     ASSERT_TRUE(service.registerUser(makeRegPayload("bob", "bob@test.com")).has_value());
 
@@ -51,8 +43,7 @@ TEST_F(AuthFlowTest, RegisterDuplicateUsername)
     EXPECT_EQ(dup.error().code, "username_exists");
 }
 
-TEST_F(AuthFlowTest, RegisterDuplicateEmail)
-{
+TEST_F(AuthFlowTest, RegisterDuplicateEmail) {
     AuthService service;
     ASSERT_TRUE(service.registerUser(makeRegPayload("carol", "same@test.com")).has_value());
 
@@ -61,8 +52,7 @@ TEST_F(AuthFlowTest, RegisterDuplicateEmail)
     EXPECT_EQ(dup.error().code, "email_exists");
 }
 
-TEST_F(AuthFlowTest, RegisterInvalidDataRejected)
-{
+TEST_F(AuthFlowTest, RegisterInvalidDataRejected) {
     AuthService service;
 
     // username too short
@@ -73,10 +63,10 @@ TEST_F(AuthFlowTest, RegisterInvalidDataRejected)
 
 // ==================== login ====================
 
-TEST_F(AuthFlowTest, LoginByUsernameSuccess)
-{
+TEST_F(AuthFlowTest, LoginByUsernameSuccess) {
     AuthService service;
-    ASSERT_TRUE(service.registerUser(makeRegPayload("dave", "dave@test.com", "mypass123")).has_value());
+    ASSERT_TRUE(
+        service.registerUser(makeRegPayload("dave", "dave@test.com", "mypass123")).has_value());
 
     auto login = service.login({{"username", "dave"}, {"password", "mypass123"}});
     ASSERT_TRUE(login.has_value());
@@ -84,36 +74,34 @@ TEST_F(AuthFlowTest, LoginByUsernameSuccess)
     EXPECT_EQ(login->user.username, "dave");
 }
 
-TEST_F(AuthFlowTest, LoginByEmailSuccess)
-{
+TEST_F(AuthFlowTest, LoginByEmailSuccess) {
     AuthService service;
-    ASSERT_TRUE(service.registerUser(makeRegPayload("eve", "eve@test.com", "mypass123")).has_value());
+    ASSERT_TRUE(
+        service.registerUser(makeRegPayload("eve", "eve@test.com", "mypass123")).has_value());
 
     auto login = service.login({{"email", "eve@test.com"}, {"password", "mypass123"}});
     ASSERT_TRUE(login.has_value());
     EXPECT_EQ(login->user.email, "eve@test.com");
 }
 
-TEST_F(AuthFlowTest, LoginWrongPassword)
-{
+TEST_F(AuthFlowTest, LoginWrongPassword) {
     AuthService service;
-    ASSERT_TRUE(service.registerUser(makeRegPayload("frank", "frank@test.com", "right123")).has_value());
+    ASSERT_TRUE(
+        service.registerUser(makeRegPayload("frank", "frank@test.com", "right123")).has_value());
 
     auto login = service.login({{"username", "frank"}, {"password", "wrong"}});
     ASSERT_FALSE(login.has_value());
     EXPECT_EQ(login.error().code, "invalid_credentials");
 }
 
-TEST_F(AuthFlowTest, LoginNonexistentUser)
-{
+TEST_F(AuthFlowTest, LoginNonexistentUser) {
     AuthService service;
     auto login = service.login({{"username", "nobody"}, {"password", "pass"}});
     ASSERT_FALSE(login.has_value());
     EXPECT_EQ(login.error().code, "invalid_credentials");
 }
 
-TEST_F(AuthFlowTest, LoginMissingCredentials)
-{
+TEST_F(AuthFlowTest, LoginMissingCredentials) {
     AuthService service;
     auto login = service.login({{"username", ""}, {"password", ""}});
     ASSERT_FALSE(login.has_value());
@@ -122,8 +110,7 @@ TEST_F(AuthFlowTest, LoginMissingCredentials)
 
 // ==================== login token is valid JWT ====================
 
-TEST_F(AuthFlowTest, LoginTokenCanBeVerified)
-{
+TEST_F(AuthFlowTest, LoginTokenCanBeVerified) {
     AuthService service;
     ASSERT_TRUE(service.registerUser(makeRegPayload("grace", "grace@test.com")).has_value());
 

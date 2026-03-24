@@ -2,14 +2,12 @@
 
 #include <nlohmann/json.hpp>
 
-TaskEventHub& TaskEventHub::instance()
-{
+TaskEventHub& TaskEventHub::instance() {
     static TaskEventHub hub;
     return hub;
 }
 
-void TaskEventHub::subscribe(int64_t userId, const drogon::WebSocketConnectionPtr& connection)
-{
+void TaskEventHub::subscribe(int64_t userId, const drogon::WebSocketConnectionPtr& connection) {
     if (!connection || userId <= 0) {
         return;
     }
@@ -20,8 +18,7 @@ void TaskEventHub::subscribe(int64_t userId, const drogon::WebSocketConnectionPt
     owners_[key] = userId;
 }
 
-void TaskEventHub::unsubscribe(const drogon::WebSocketConnectionPtr& connection)
-{
+void TaskEventHub::unsubscribe(const drogon::WebSocketConnectionPtr& connection) {
     if (!connection) {
         return;
     }
@@ -47,8 +44,7 @@ void TaskEventHub::unsubscribe(const drogon::WebSocketConnectionPtr& connection)
     }
 }
 
-void TaskEventHub::publishTaskUpdated(const models::ImageGeneration& generation)
-{
+void TaskEventHub::publishTaskUpdated(const models::ImageGeneration& generation) {
     if (generation.user_id <= 0) {
         return;
     }
@@ -58,10 +54,8 @@ void TaskEventHub::publishTaskUpdated(const models::ImageGeneration& generation)
         return;
     }
 
-    const nlohmann::json payload = {
-        {"type", "image.task.updated"},
-        {"task", generation.toJson(false)}
-    };
+    const nlohmann::json payload = {{"type", "image.task.updated"},
+                                    {"task", generation.toJson(false)}};
     const auto serialized = payload.dump();
 
     for (const auto& connection : subscribers) {
@@ -74,8 +68,8 @@ void TaskEventHub::publishTaskUpdated(const models::ImageGeneration& generation)
     }
 }
 
-std::vector<drogon::WebSocketConnectionPtr> TaskEventHub::copySubscribersLocked(int64_t userId) const
-{
+std::vector<drogon::WebSocketConnectionPtr>
+TaskEventHub::copySubscribersLocked(int64_t userId) const {
     std::lock_guard lock(mutex_);
     std::vector<drogon::WebSocketConnectionPtr> subscribers;
 

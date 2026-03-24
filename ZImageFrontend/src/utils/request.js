@@ -1,134 +1,134 @@
-import axios from 'axios'
-import { ElMessage } from 'element-plus'
-import router from '@/router'
-import { clearStoredAuth, isTokenExpired } from '@/utils/jwt'
-import { closeTaskSocket } from '@/utils/taskSocket'
+import axios from 'axios';
+import { ElMessage } from 'element-plus';
+import router from '@/router';
+import { clearStoredAuth, isTokenExpired } from '@/utils/jwt';
+import { closeTaskSocket } from '@/utils/taskSocket';
 
 const request = axios.create({
   baseURL: '/api',
   timeout: 120000,
-  withCredentials: false
-})
+  withCredentials: false,
+});
 
 const extractErrorMessage = (payload) => {
   if (!payload) {
-    return ''
+    return '';
   }
 
   if (typeof payload === 'string') {
-    return payload
+    return payload;
   }
 
   if (typeof payload.message === 'string' && payload.message) {
-    return payload.message
+    return payload.message;
   }
 
   if (typeof payload.error === 'string' && payload.error) {
-    return payload.error
+    return payload.error;
   }
 
   if (payload.error && typeof payload.error === 'object') {
     if (typeof payload.error.message === 'string' && payload.error.message) {
-      return payload.error.message
+      return payload.error.message;
     }
     if (typeof payload.error.code === 'string' && payload.error.code) {
-      return payload.error.code
+      return payload.error.code;
     }
   }
 
-  return ''
-}
+  return '';
+};
 
 const parseErrorPayload = async (payload) => {
   if (!payload || typeof Blob === 'undefined' || !(payload instanceof Blob)) {
-    return payload
+    return payload;
   }
 
-  const contentType = payload.type || ''
+  const contentType = payload.type || '';
   if (!contentType.includes('application/json') && !contentType.startsWith('text/')) {
-    return payload
+    return payload;
   }
 
   try {
-    const text = await payload.text()
-    return text ? JSON.parse(text) : payload
+    const text = await payload.text();
+    return text ? JSON.parse(text) : payload;
   } catch (error) {
-    return payload
+    return payload;
   }
-}
+};
 
 request.interceptors.request.use(
-  config => {
-    const token = localStorage.getItem('token')
+  (config) => {
+    const token = localStorage.getItem('token');
     if (token) {
       if (isTokenExpired(token)) {
-        clearStoredAuth()
-        closeTaskSocket()
-        ElMessage.error('登录已过期，请重新登录')
-        router.push('/login')
-        return Promise.reject(new Error('登录已过期，请重新登录'))
+        clearStoredAuth();
+        closeTaskSocket();
+        ElMessage.error('登录已过期，请重新登录');
+        router.push('/login');
+        return Promise.reject(new Error('登录已过期，请重新登录'));
       }
 
-      config.headers['Authorization'] = `Bearer ${token}`
+      config.headers['Authorization'] = `Bearer ${token}`;
     }
-    return config
+    return config;
   },
-  error => {
-    console.error('Request error:', error)
-    return Promise.reject(error)
+  (error) => {
+    console.error('Request error:', error);
+    return Promise.reject(error);
   }
-)
+);
 
 request.interceptors.response.use(
-  response => {
-    const body = response.data
+  (response) => {
+    const body = response.data;
 
     // Compatible with two response shapes:
     // 1) { code, message, data }
     // 2) plain body with HTTP status code
     if (body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, 'code')) {
-      const businessCode = Number(body.code)
+      const businessCode = Number(body.code);
       if (!Number.isNaN(businessCode) && businessCode !== 200) {
-        const message = body.message || body.error || 'Error occurred'
-        ElMessage.error(message)
-        return Promise.reject(new Error(message))
+        const message = body.message || body.error || 'Error occurred';
+        ElMessage.error(message);
+        return Promise.reject(new Error(message));
       }
-      return body
+      return body;
     }
 
     return {
       code: response.status,
       data: body,
-      message: extractErrorMessage(body)
-    }
+      message: extractErrorMessage(body),
+    };
   },
-  async error => {
-    console.error('Response error:', error)
+  async (error) => {
+    console.error('Response error:', error);
 
-    const parsedPayload = await parseErrorPayload(error.response?.data)
+    const parsedPayload = await parseErrorPayload(error.response?.data);
     if (error.response) {
-      error.response.data = parsedPayload
+      error.response.data = parsedPayload;
     }
 
-    const message = extractErrorMessage(parsedPayload) || error.message || 'Network error'
-    error.message = message
+    const message = extractErrorMessage(parsedPayload) || error.message || 'Network error';
+    error.message = message;
 
     if (error.response?.status === 401) {
-      ElMessage.error(message || '登录已过期，请重新登录')
-      clearStoredAuth()
-      closeTaskSocket()
-      router.push('/login')
-      return Promise.reject(error)
+      ElMessage.error(message || '登录已过期，请重新登录');
+      clearStoredAuth();
+      closeTaskSocket();
+      router.push('/login');
+      return Promise.reject(error);
     }
 
     if (error.response?.status === 403) {
-      ElMessage.error('没有权限访问')
-      return Promise.reject(error)
+      ElMessage.error('没有权限访问');
+      return Promise.reject(error);
     }
 
-    ElMessage.error(message)
-    return Promise.reject(error)
+    ElMessage.error(message);
+    return Promise.reject(error);
   }
-)
+);
 
-export default request
+export default request;

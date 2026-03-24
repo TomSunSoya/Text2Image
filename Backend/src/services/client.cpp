@@ -27,8 +27,7 @@ struct SendEnvelope {
     drogon::HttpResponsePtr response;
 };
 
-std::string trim(std::string value)
-{
+std::string trim(std::string value) {
     while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
         value.erase(value.begin());
     }
@@ -38,8 +37,7 @@ std::string trim(std::string value)
     return value;
 }
 
-std::optional<ParsedUrl> parseUrl(const std::string& url)
-{
+std::optional<ParsedUrl> parseUrl(const std::string& url) {
     const auto schemePos = url.find("://");
     if (schemePos == std::string::npos) {
         return std::nullopt;
@@ -67,8 +65,7 @@ std::optional<ParsedUrl> parseUrl(const std::string& url)
     return parsed;
 }
 
-void applyHeaders(const drogon::HttpRequestPtr& req, const std::vector<std::string>& headers)
-{
+void applyHeaders(const drogon::HttpRequestPtr& req, const std::vector<std::string>& headers) {
     for (const auto& rawHeader : headers) {
         const auto split = rawHeader.find(':');
         if (split == std::string::npos) {
@@ -83,13 +80,12 @@ void applyHeaders(const drogon::HttpRequestPtr& req, const std::vector<std::stri
     }
 }
 
-bool isRedirectStatus(long statusCode)
-{
-    return statusCode == 301 || statusCode == 302 || statusCode == 303 || statusCode == 307 || statusCode == 308;
+bool isRedirectStatus(long statusCode) {
+    return statusCode == 301 || statusCode == 302 || statusCode == 303 || statusCode == 307 ||
+           statusCode == 308;
 }
 
-std::string resolveRedirectUrl(const ParsedUrl& current, const std::string& location)
-{
+std::string resolveRedirectUrl(const ParsedUrl& current, const std::string& location) {
     if (location.empty()) {
         return {};
     }
@@ -105,14 +101,11 @@ std::string resolveRedirectUrl(const ParsedUrl& current, const std::string& loca
     return current.origin + "/" + location;
 }
 
-trantor::EventLoop* sharedHttpClientLoop()
-{
+trantor::EventLoop* sharedHttpClientLoop() {
     static trantor::EventLoopThread loopThread("backend-http-client-loop");
     static std::once_flag startOnce;
 
-    std::call_once(startOnce, [&] {
-        loopThread.run();
-    });
+    std::call_once(startOnce, [&] { loopThread.run(); });
 
     auto* loop = loopThread.getLoop();
     while (loop == nullptr) {
@@ -123,12 +116,9 @@ trantor::EventLoop* sharedHttpClientLoop()
     return loop;
 }
 
-SendEnvelope sendOnce(const ParsedUrl& parsed,
-                      drogon::HttpMethod method,
-                      const std::string* payload,
-                      const std::vector<std::string>& headers,
-                      long timeoutSeconds)
-{
+SendEnvelope sendOnce(const ParsedUrl& parsed, drogon::HttpMethod method,
+                      const std::string* payload, const std::vector<std::string>& headers,
+                      long timeoutSeconds) {
     SendEnvelope envelope{};
 
     auto client = drogon::HttpClient::newHttpClient(parsed.origin, sharedHttpClientLoop());
@@ -153,8 +143,9 @@ SendEnvelope sendOnce(const ParsedUrl& parsed,
     try {
         auto [result, response] = client->sendRequest(request, timeout);
         if (result != drogon::ReqResult::Ok) {
-            envelope.http.error = std::format("request failed, req_result={}", static_cast<int>(result));
-            return envelope; 
+            envelope.http.error =
+                std::format("request failed, req_result={}", static_cast<int>(result));
+            return envelope;
         }
 
         envelope.response = std::move(response);
@@ -175,19 +166,14 @@ SendEnvelope sendOnce(const ParsedUrl& parsed,
 
 } // namespace
 
-bool HttpResult::ok() const
-{
+bool HttpResult::ok() const {
     return error.empty() && status_code >= 200 && status_code < 300;
 }
 
-HttpClient::HttpClient(long timeoutSeconds) : timeout_seconds_(timeoutSeconds)
-{
-}
+HttpClient::HttpClient(long timeoutSeconds) : timeout_seconds_(timeoutSeconds) {}
 
-HttpResult HttpClient::get(const std::string& url,
-                           const std::vector<std::string>& headers,
-                           bool followRedirects) const
-{
+HttpResult HttpClient::get(const std::string& url, const std::vector<std::string>& headers,
+                           bool followRedirects) const {
     constexpr int kMaxRedirects = 5;
     std::string currentUrl = url;
 
@@ -223,10 +209,8 @@ HttpResult HttpClient::get(const std::string& url,
     }
 }
 
-HttpResult HttpClient::postJson(const std::string& url,
-                                const std::string& payload,
-                                const std::vector<std::string>& headers) const
-{
+HttpResult HttpClient::postJson(const std::string& url, const std::string& payload,
+                                const std::vector<std::string>& headers) const {
     const auto parsed = parseUrl(url);
     if (!parsed) {
         HttpResult invalid;

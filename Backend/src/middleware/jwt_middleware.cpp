@@ -4,10 +4,8 @@
 
 #include "jwt_utils.h"
 
-void JwtMiddleware::doFilter(const drogon::HttpRequestPtr& req,
-                             drogon::FilterCallback&& callback,
-                             drogon::FilterChainCallback&& chainCallback)
-{
+void JwtMiddleware::doFilter(const drogon::HttpRequestPtr& req, drogon::FilterCallback&& callback,
+                             drogon::FilterChainCallback&& chainCallback) {
     auto token = utils::extractBearerToken(req);
     if (!token) {
         auto resp = drogon::HttpResponse::newHttpResponse();
