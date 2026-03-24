@@ -24,7 +24,8 @@ int main() {
         {
             const auto jwtSecret = config.at("jwt").value("secret", std::string());
             const std::vector<std::string> insecureSecrets = {
-                "", "CHANGE_ME", "change-me-via-JWT_SECRET", "development-secret-change-me"};
+                "", "CHANGE_ME", "CHANGE_ME_JWT_SECRET", "change-me-via-JWT_SECRET",
+                "development-secret-change-me"};
             for (const auto& insecure : insecureSecrets) {
                 if (jwtSecret == insecure) {
                     spdlog::critical("JWT secret is not configured! "
@@ -103,7 +104,13 @@ int main() {
                std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
                 auto resp = drogon::HttpResponse::newHttpResponse();
                 resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
-                resp->setBody(R"({"status":"ok"})");
+                const bool dbHealthy = database::DBManager::isHealthy();
+                if (!dbHealthy) {
+                    resp->setStatusCode(drogon::k503ServiceUnavailable);
+                    resp->setBody(R"({"status":"unhealthy","database":"down"})");
+                } else {
+                    resp->setBody(R"({"status":"ok","database":"up"})");
+                }
                 callback(resp);
             };
 
