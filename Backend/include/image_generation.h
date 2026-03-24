@@ -28,7 +28,7 @@ class ImageGeneration {
     std::string image_url;
     std::string thumbnail_url;
     std::string storage_key;
-    std::string image_base64;
+    std::string image_bytes;
     std::string error_message;
     double generation_time{0};
 
@@ -40,7 +40,7 @@ class ImageGeneration {
 
     bool isTerminal() const;
 
-    nlohmann::json toJson(bool includeImagePayload = true) const;
+    nlohmann::json toJson() const;
 
     static ImageGeneration fromJson(const nlohmann::json& j);
 };

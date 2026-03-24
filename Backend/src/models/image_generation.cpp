@@ -63,7 +63,7 @@ static std::optional<double> readDoubleAny(const nlohmann::json& j,
     return std::nullopt;
 }
 
-nlohmann::json ImageGeneration::toJson(bool includeImagePayload) const {
+nlohmann::json ImageGeneration::toJson() const {
     nlohmann::json j = {{"id", id},
                         {"taskId", id},
                         {"requestId", request_id},
@@ -81,15 +81,11 @@ nlohmann::json ImageGeneration::toJson(bool includeImagePayload) const {
                         {"errorMessage", error_message},
                         {"generationTime", generation_time},
                         {"createdAt", timeToString(created_at)},
-                        {"thumbnail_url", thumbnail_url},
+                        {"thumbnailUrl", thumbnail_url},
                         {"storageKey", storage_key}};
 
     if (seed.has_value()) {
         j["seed"] = seed.value();
-    }
-
-    if (includeImagePayload && !image_base64.empty()) {
-        j["imageBase64"] = image_base64;
     }
 
     putOptionalTime(j, "startedAt", started_at);
@@ -132,10 +128,8 @@ ImageGeneration ImageGeneration::fromJson(const nlohmann::json& j) {
         img.image_url = *value;
     if (const auto value = readStringAny(j, {"thumbnail_url", "thumbnailUrl"}))
         img.thumbnail_url = *value;
-    if (const auto value = readStringAny(j, {"storage_key", "storeage_key", "storageKey"}))
+    if (const auto value = readStringAny(j, {"storage_key", "storage_key", "storageKey"}))
         img.storage_key = *value;
-    if (const auto value = readStringAny(j, {"image_base64", "imageBase64"}))
-        img.image_base64 = *value;
     if (const auto value = readStringAny(j, {"error_message", "errorMessage"}))
         img.error_message = *value;
     if (const auto value = readDoubleAny(j, {"generation_time", "generationTime"}))

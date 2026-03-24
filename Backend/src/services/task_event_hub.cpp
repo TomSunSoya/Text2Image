@@ -54,8 +54,7 @@ void TaskEventHub::publishTaskUpdated(const models::ImageGeneration& generation)
         return;
     }
 
-    const nlohmann::json payload = {{"type", "image.task.updated"},
-                                    {"task", generation.toJson(false)}};
+    const nlohmann::json payload = {{"type", "image.task.updated"}, {"task", generation.toJson()}};
     const auto serialized = payload.dump();
 
     for (const auto& connection : subscribers) {
