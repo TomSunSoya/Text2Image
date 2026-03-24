@@ -103,6 +103,7 @@ Start the services in this order.
 ### 6.0 Docker Compose
 ```powershell
 copy .env.example .env
+# edit .env and replace every CHANGE_ME_* value before shared or deployed use
 docker compose up --build
 ```
 
@@ -213,8 +214,8 @@ Environment-variable overrides are supported in the backend for common settings 
 - `STORAGE_ROOT_DIR` `STORAGE_PUBLIC_URL_PREFIX` `STORAGE_EXTENSION`
 
 The backend is now container-friendly in two ways:
-- it can start from environment variables even if `config.json` is not mounted into the container
-- `BACKEND_CONFIG_PATH` can point to a mounted config file when you do want file-based configuration
+- Docker image builds include `/app/config.json` from `Backend/config.json.example`, so the container always has a file-based baseline config
+- `BACKEND_CONFIG_PATH` can point to a mounted config file when you want to override that baseline config
 
 ### 7.2 Model Service
 

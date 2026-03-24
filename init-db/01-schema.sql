@@ -1,9 +1,3 @@
-CREATE DATABASE IF NOT EXISTS image_generator
-  CHARACTER SET utf8mb4
-  COLLATE utf8mb4_unicode_ci;
-
-USE image_generator;
-
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   username VARCHAR(64) NOT NULL,
