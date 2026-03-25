@@ -24,7 +24,7 @@ The system is split into three layers:
 Default ports:
 
 - frontend: `3000`
-- backend: `8080`
+- backend: `8082`
 - model service: `8081`
 
 ## 3. Main Flow
@@ -183,7 +183,7 @@ cp Backend/config.json.example Backend/config.json
 Important settings:
 
 - `server`: host, port, thread count
-- `database`: MySQL connection and pool settings
+- `database`: MySQL connection, optional SSL mode, and pool settings
 - `jwt`: secret and token expiration
 - `python_service`: model-service URL and execution timeout
 - `task_engine`: worker count, polling, lease, retry policy
@@ -192,7 +192,7 @@ Important settings:
 Environment-variable overrides are supported in the backend for common settings such as:
 
 - `BACKEND_PORT`
-- `DB_HOST` `DB_PORT` `DB_USERNAME` `DB_PASSWORD` `DB_NAME`
+- `DB_HOST` `DB_PORT` `DB_USERNAME` `DB_PASSWORD` `DB_NAME` `DB_SSL`
 - `JWT_SECRET`
 - `PYTHON_SERVICE_URL` `PYTHON_SERVICE_TIMEOUT_SECONDS`
 

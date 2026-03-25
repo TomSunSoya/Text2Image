@@ -5,6 +5,33 @@
 
 namespace database {
 
+MysqlConfig parseMysqlConfig(const nlohmann::json& dbConfig) {
+    MysqlConfig cfg;
+    cfg.host = dbConfig.value("host", std::string("127.0.0.1"));
+    cfg.port = dbConfig.value("port", 33060);
+    cfg.user = dbConfig.value("username", std::string());
+    cfg.password = dbConfig.value("password", std::string());
+    cfg.database = dbConfig.value("database", std::string());
+    if (dbConfig.contains("ssl") && dbConfig.at("ssl").is_boolean()) {
+        cfg.ssl = dbConfig.at("ssl").get<bool>();
+    }
+    return cfg;
+}
+
+mysqlx::SessionSettings buildSessionSettings(const MysqlConfig& cfg) {
+    if (cfg.host.empty()) {
+        throw std::runtime_error("DB not initialized");
+    }
+
+    mysqlx::SessionSettings settings(cfg.host, cfg.port, cfg.user, cfg.password);
+    if (cfg.ssl.has_value()) {
+        settings.erase(mysqlx::SessionOption::SSL_MODE);
+        settings.set(mysqlx::SessionOption::SSL_MODE,
+                     *cfg.ssl ? mysqlx::SSLMode::REQUIRED : mysqlx::SSLMode::DISABLED);
+    }
+    return settings;
+}
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -18,14 +45,6 @@ struct ThreadSessionState {
 ThreadSessionState& currentThreadSessionState() {
     thread_local ThreadSessionState state;
     return state;
-}
-
-mysqlx::SessionSettings buildSessionSettings(const MysqlConfig& cfg) {
-    if (cfg.host.empty()) {
-        throw std::runtime_error("DB not initialized");
-    }
-
-    return mysqlx::SessionSettings(cfg.host, cfg.port, cfg.user, cfg.password);
 }
 
 std::unique_ptr<mysqlx::Session> createSession(const MysqlConfig& cfg) {

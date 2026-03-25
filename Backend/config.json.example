@@ -1,13 +1,14 @@
 {
   "server": {
     "host": "0.0.0.0",
-    "port": 8080,
+    "port": 8082,
     "threads": 4,
     "log_level": "info"
   },
   "database": {
     "host": "localhost",
     "port": 33060,
+    "ssl": false,
     "username": "root",
     "password": "CHANGE_ME",
     "database": "image_generator",

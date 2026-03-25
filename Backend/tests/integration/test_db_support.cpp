@@ -60,6 +60,32 @@ int readEnvInt(const char* name, int fallback) {
     return fallback;
 }
 
+std::optional<bool> readEnvBool(const char* name) {
+    if (const auto value = readEnv(name)) {
+        std::string normalized;
+        normalized.reserve(value->size());
+        for (char ch : *value) {
+            const auto byte = static_cast<unsigned char>(ch);
+            if (std::isspace(byte)) {
+                continue;
+            }
+            normalized += static_cast<char>(std::tolower(byte));
+        }
+
+        if (normalized == "1" || normalized == "true" || normalized == "yes" ||
+            normalized == "on") {
+            return true;
+        }
+
+        if (normalized == "0" || normalized == "false" || normalized == "no" ||
+            normalized == "off") {
+            return false;
+        }
+    }
+
+    return std::nullopt;
+}
+
 std::string resolveTestDatabaseName(const std::string& configuredName) {
     if (const auto explicitName = readEnv("TEST_DB_NAME")) {
         return *explicitName;
@@ -136,13 +162,15 @@ database::MysqlConfig testDbConfig() {
     const auto config = backend::loadConfig();
     const auto& dbConfig = config.at("database");
 
-    database::MysqlConfig cfg;
-    cfg.host =
-        trim(readEnv("TEST_DB_HOST").value_or(dbConfig.value("host", std::string("127.0.0.1"))));
-    cfg.port = readEnvInt("TEST_DB_PORT", dbConfig.value("port", 33060));
-    cfg.user = readEnv("TEST_DB_USERNAME").value_or(dbConfig.value("username", std::string{}));
-    cfg.password = readEnv("TEST_DB_PASSWORD").value_or(dbConfig.value("password", std::string{}));
-    cfg.database = resolveTestDatabaseName(dbConfig.value("database", std::string{}));
+    auto cfg = database::parseMysqlConfig(dbConfig);
+    cfg.host = trim(readEnv("TEST_DB_HOST").value_or(cfg.host));
+    cfg.port = readEnvInt("TEST_DB_PORT", cfg.port);
+    cfg.user = readEnv("TEST_DB_USERNAME").value_or(cfg.user);
+    cfg.password = readEnv("TEST_DB_PASSWORD").value_or(cfg.password);
+    cfg.database = resolveTestDatabaseName(cfg.database);
+    if (const auto ssl = readEnvBool("TEST_DB_SSL")) {
+        cfg.ssl = *ssl;
+    }
     return cfg;
 }
 
@@ -156,7 +184,7 @@ void ensureTestDatabase() {
         setWorkersDisabledForIntegrationTests();
 
         const auto cfg = testDbConfig();
-        mysqlx::Session admin(mysqlx::SessionSettings(cfg.host, cfg.port, cfg.user, cfg.password));
+        mysqlx::Session admin(database::buildSessionSettings(cfg));
         admin.sql("CREATE DATABASE IF NOT EXISTS `" + escapeIdentifier(cfg.database) + "`")
             .execute();
 

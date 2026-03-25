@@ -1,10 +1,13 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
-#include <optional>
+
 #include <mysqlx/xdevapi.h>
+#include <nlohmann/json.hpp>
+
 #include "user.h"
 #include "image_generation.h"
 
@@ -16,8 +19,11 @@ struct MysqlConfig {
     std::string database;
     std::string user;
     std::string password;
-    bool ssl{false};
+    std::optional<bool> ssl;
 };
+
+MysqlConfig parseMysqlConfig(const nlohmann::json& dbConfig);
+mysqlx::SessionSettings buildSessionSettings(const MysqlConfig& cfg);
 
 class DBManager {
   public:
