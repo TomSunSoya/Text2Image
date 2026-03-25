@@ -31,12 +31,7 @@ int main() {
             }
         }
 
-        database::MysqlConfig mysqlConfig;
-        mysqlConfig.host = dbConfig.value("host", std::string("127.0.0.1"));
-        mysqlConfig.port = dbConfig.value("port", 33060);
-        mysqlConfig.user = dbConfig.value("username", std::string());
-        mysqlConfig.password = dbConfig.value("password", std::string());
-        mysqlConfig.database = dbConfig.value("database", std::string());
+        const auto mysqlConfig = database::parseMysqlConfig(dbConfig);
 
         try {
             database::DBManager::init(mysqlConfig);
@@ -78,7 +73,7 @@ int main() {
         drogon::app().registerHandler("/health", healthHandler);
 
         const auto host = serverConfig.value("host", std::string("0.0.0.0"));
-        const auto port = serverConfig.value("port", 8080);
+        const auto port = serverConfig.value("port", 8082);
         const auto threads = serverConfig.value("threads", 1);
 
         // Limit request body to 1MB to prevent memory exhaustion from
