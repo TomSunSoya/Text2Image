@@ -12,13 +12,13 @@
 
 #include "Backend.h"
 #include "ImageRepo.h"
+#include "string_utils.h"
 
 namespace test_support {
 
 namespace {
 
-std::optional<std::string> readEnv(const char* name)
-{
+std::optional<std::string> readEnv(const char* name) {
 #ifdef _WIN32
     char* raw = nullptr;
     size_t size = 0;
@@ -43,16 +43,14 @@ std::optional<std::string> readEnv(const char* name)
     return value;
 }
 
-std::string trim(std::string value)
-{
+std::string trim(std::string value) {
     auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
     value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
     return value;
 }
 
-int readEnvInt(const char* name, int fallback)
-{
+int readEnvInt(const char* name, int fallback) {
     if (const auto value = readEnv(name)) {
         try {
             return std::stoi(*value);
@@ -63,8 +61,14 @@ int readEnvInt(const char* name, int fallback)
     return fallback;
 }
 
-std::string resolveTestDatabaseName(const std::string& configuredName)
-{
+std::optional<bool> readEnvBool(const char* name) {
+    if (const auto value = readEnv(name)) {
+        return utils::parseBool(*value);
+    }
+    return std::nullopt;
+}
+
+std::string resolveTestDatabaseName(const std::string& configuredName) {
     if (const auto explicitName = readEnv("TEST_DB_NAME")) {
         return *explicitName;
     }
@@ -80,8 +84,7 @@ std::string resolveTestDatabaseName(const std::string& configuredName)
     return configuredName + "_test";
 }
 
-std::string escapeIdentifier(const std::string& value)
-{
+std::string escapeIdentifier(const std::string& value) {
     std::string escaped;
     escaped.reserve(value.size());
     for (char ch : value) {
@@ -94,13 +97,11 @@ std::string escapeIdentifier(const std::string& value)
     return escaped;
 }
 
-std::string qualifiedName(const std::string& schema, const std::string& table)
-{
+std::string qualifiedName(const std::string& schema, const std::string& table) {
     return "`" + escapeIdentifier(schema) + "`.`" + escapeIdentifier(table) + "`";
 }
 
-void setWorkersDisabledForIntegrationTests()
-{
+void setWorkersDisabledForIntegrationTests() {
     if (readEnv("TASK_ENGINE_WORKERS").has_value()) {
         return;
     }
@@ -112,11 +113,10 @@ void setWorkersDisabledForIntegrationTests()
 #endif
 }
 
-void ensureUsersTable()
-{
+void ensureUsersTable() {
     const auto cfg = testDbConfig();
-    database::DBManager::threadSession().sql(
-        "CREATE TABLE IF NOT EXISTS " + qualifiedName(cfg.database, "users") + R"(
+    database::DBManager::threadSession()
+        .sql("CREATE TABLE IF NOT EXISTS " + qualifiedName(cfg.database, "users") + R"(
         (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             username VARCHAR(64) NOT NULL,
@@ -133,42 +133,42 @@ void ensureUsersTable()
         .execute();
 }
 
-void ensureImageTable()
-{
+void ensureImageTable() {
     ImageRepo repo;
     (void)repo.findByUserId(0, 0, 1);
 }
 
 } // namespace
 
-database::MysqlConfig testDbConfig()
-{
+database::MysqlConfig testDbConfig() {
     const auto config = backend::loadConfig();
     const auto& dbConfig = config.at("database");
 
-    database::MysqlConfig cfg;
-    cfg.host = trim(readEnv("TEST_DB_HOST").value_or(dbConfig.value("host", std::string("127.0.0.1"))));
-    cfg.port = readEnvInt("TEST_DB_PORT", dbConfig.value("port", 33060));
-    cfg.user = readEnv("TEST_DB_USERNAME").value_or(dbConfig.value("username", std::string{}));
-    cfg.password = readEnv("TEST_DB_PASSWORD").value_or(dbConfig.value("password", std::string{}));
-    cfg.database = resolveTestDatabaseName(dbConfig.value("database", std::string{}));
+    auto cfg = database::parseMysqlConfig(dbConfig);
+    cfg.host = trim(readEnv("TEST_DB_HOST").value_or(cfg.host));
+    cfg.port = readEnvInt("TEST_DB_PORT", cfg.port);
+    cfg.user = readEnv("TEST_DB_USERNAME").value_or(cfg.user);
+    cfg.password = readEnv("TEST_DB_PASSWORD").value_or(cfg.password);
+    cfg.database = resolveTestDatabaseName(cfg.database);
+    if (const auto ssl = readEnvBool("TEST_DB_SSL")) {
+        cfg.ssl = *ssl;
+    }
     return cfg;
 }
 
-std::string qualifiedTableName(const std::string& tableName)
-{
+std::string qualifiedTableName(const std::string& tableName) {
     return qualifiedName(testDbConfig().database, tableName);
 }
 
-void ensureTestDatabase()
-{
+void ensureTestDatabase() {
     static std::once_flag once;
     std::call_once(once, [] {
         setWorkersDisabledForIntegrationTests();
 
         const auto cfg = testDbConfig();
-        mysqlx::Session admin(mysqlx::SessionSettings(cfg.host, cfg.port, cfg.user, cfg.password));
-        admin.sql("CREATE DATABASE IF NOT EXISTS `" + escapeIdentifier(cfg.database) + "`").execute();
+        mysqlx::Session admin(database::buildSessionSettings(cfg));
+        admin.sql("CREATE DATABASE IF NOT EXISTS `" + escapeIdentifier(cfg.database) + "`")
+            .execute();
 
         database::DBManager::init(cfg);
         ensureUsersTable();
@@ -176,16 +176,14 @@ void ensureTestDatabase()
     });
 }
 
-void cleanUsers()
-{
+void cleanUsers() {
     ensureTestDatabase();
     database::DBManager::threadSession()
         .sql("DELETE FROM " + qualifiedTableName("users"))
         .execute();
 }
 
-void cleanTables()
-{
+void cleanTables() {
     ensureTestDatabase();
     database::DBManager::threadSession()
         .sql("DELETE FROM " + qualifiedTableName("image_generations"))

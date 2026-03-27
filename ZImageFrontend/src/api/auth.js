@@ -1,4 +1,4 @@
-import request from '@/utils/request'
+import request from '@/utils/request';
 
 export const authApi = {
   // 用户注册
@@ -6,8 +6,8 @@ export const authApi = {
     return request({
       url: '/auth/register',
       method: 'post',
-      data
-    })
+      data,
+    });
   },
 
   // 用户登录
@@ -15,13 +15,13 @@ export const authApi = {
     return request({
       url: '/auth/login',
       method: 'post',
-      data
-    })
+      data,
+    });
   },
 
   // 登出（前端处理）
   logout() {
-    localStorage.removeItem('token')
-    localStorage.removeItem('userInfo')
-  }
-}
+    localStorage.removeItem('token');
+    localStorage.removeItem('userInfo');
+  },
+};

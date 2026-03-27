@@ -11,8 +11,7 @@
 #include "image_service.h"
 #include "minio_client.h"
 
-int main()
-{
+int main() {
     try {
         const auto config = backend::loadConfig();
         const auto& serverConfig = config.at("server");
@@ -22,28 +21,21 @@ int main()
         {
             const auto jwtSecret = config.at("jwt").value("secret", std::string());
             const std::vector<std::string> insecureSecrets = {
-                "", "CHANGE_ME", "change-me-via-JWT_SECRET", "development-secret-change-me"
-            };
+                "", "CHANGE_ME", "change-me-via-JWT_SECRET", "development-secret-change-me"};
             for (const auto& insecure : insecureSecrets) {
                 if (jwtSecret == insecure) {
-                    spdlog::critical(
-                        "JWT secret is not configured! "
-                        "Set JWT_SECRET env var or update jwt.secret in config.json");
+                    spdlog::critical("JWT secret is not configured! "
+                                     "Set JWT_SECRET env var or update jwt.secret in config.json");
                     return 1;
                 }
             }
         }
 
-        database::MysqlConfig mysqlConfig;
-        mysqlConfig.host = dbConfig.value("host", std::string("127.0.0.1"));
-        mysqlConfig.port = dbConfig.value("port", 33060);
-        mysqlConfig.user = dbConfig.value("username", std::string());
-        mysqlConfig.password = dbConfig.value("password", std::string());
-        mysqlConfig.database = dbConfig.value("database", std::string());
+        const auto mysqlConfig = database::parseMysqlConfig(dbConfig);
 
         try {
             database::DBManager::init(mysqlConfig);
-			ImageService::bootstrapWorkers();
+            ImageService::bootstrapWorkers();
             spdlog::info("Database initialized: {}:{}", mysqlConfig.host, mysqlConfig.port);
         } catch (const std::exception& e) {
             spdlog::warn("Database initialization failed: {}", e.what());
@@ -81,7 +73,7 @@ int main()
         drogon::app().registerHandler("/health", healthHandler);
 
         const auto host = serverConfig.value("host", std::string("0.0.0.0"));
-        const auto port = serverConfig.value("port", 8080);
+        const auto port = serverConfig.value("port", 8082);
         const auto threads = serverConfig.value("threads", 1);
 
         // Limit request body to 1MB to prevent memory exhaustion from
@@ -105,19 +97,22 @@ int main()
                 corsOrigins.push_back(origin);
             }
 
-            auto methods = corsConfig.value("allow_methods",
-                std::vector<std::string>{"GET", "POST", "PUT", "DELETE", "OPTIONS"});
+            auto methods =
+                corsConfig.value("allow_methods", std::vector<std::string>{"GET", "POST", "PUT",
+                                                                           "DELETE", "OPTIONS"});
             corsAllowMethods.clear();
             for (size_t i = 0; i < methods.size(); ++i) {
-                if (i > 0) corsAllowMethods += ", ";
+                if (i > 0)
+                    corsAllowMethods += ", ";
                 corsAllowMethods += methods[i];
             }
 
-            auto headers = corsConfig.value("allow_headers",
-                std::vector<std::string>{"Content-Type", "Authorization"});
+            auto headers = corsConfig.value(
+                "allow_headers", std::vector<std::string>{"Content-Type", "Authorization"});
             corsAllowHeaders.clear();
             for (size_t i = 0; i < headers.size(); ++i) {
-                if (i > 0) corsAllowHeaders += ", ";
+                if (i > 0)
+                    corsAllowHeaders += ", ";
                 corsAllowHeaders += headers[i];
             }
 
@@ -128,10 +123,10 @@ int main()
 
             // Handle OPTIONS preflight
             drogon::app().registerPreRoutingAdvice(
-                [corsOrigins, corsAllowAll, corsAllowMethods, corsAllowHeaders](
-                    const drogon::HttpRequestPtr& req,
-                    std::function<void(const drogon::HttpResponsePtr&)>&& acb,
-                    std::function<void()>&& accb) {
+                [corsOrigins, corsAllowAll, corsAllowMethods,
+                 corsAllowHeaders](const drogon::HttpRequestPtr& req,
+                                   std::function<void(const drogon::HttpResponsePtr&)>&& acb,
+                                   std::function<void()>&& accb) {
                     if (req->method() != drogon::Options) {
                         accb();
                         return;
@@ -142,8 +137,8 @@ int main()
 
                     const auto& origin = req->getHeader("Origin");
                     if (!origin.empty() &&
-                        (corsAllowAll ||
-                         std::find(corsOrigins.begin(), corsOrigins.end(), origin) != corsOrigins.end())) {
+                        (corsAllowAll || std::find(corsOrigins.begin(), corsOrigins.end(),
+                                                   origin) != corsOrigins.end())) {
                         resp->addHeader("Access-Control-Allow-Origin", corsAllowAll ? "*" : origin);
                         resp->addHeader("Access-Control-Allow-Methods", corsAllowMethods);
                         resp->addHeader("Access-Control-Allow-Headers", corsAllowHeaders);
@@ -157,15 +152,14 @@ int main()
             // ones such as 404 responses.
             drogon::app().registerPreSendingAdvice(
                 [corsOrigins, corsAllowAll, corsAllowMethods, corsAllowHeaders](
-                    const drogon::HttpRequestPtr& req,
-                    const drogon::HttpResponsePtr& resp) {
+                    const drogon::HttpRequestPtr& req, const drogon::HttpResponsePtr& resp) {
                     const auto& origin = req->getHeader("Origin");
                     if (origin.empty()) {
                         return;
                     }
 
-                    if (corsAllowAll ||
-                        std::find(corsOrigins.begin(), corsOrigins.end(), origin) != corsOrigins.end()) {
+                    if (corsAllowAll || std::find(corsOrigins.begin(), corsOrigins.end(), origin) !=
+                                            corsOrigins.end()) {
                         resp->addHeader("Access-Control-Allow-Origin", corsAllowAll ? "*" : origin);
                         resp->addHeader("Access-Control-Allow-Methods", corsAllowMethods);
                         resp->addHeader("Access-Control-Allow-Headers", corsAllowHeaders);

@@ -1,5 +1,7 @@
 #include "Backend.h"
 
+#include "string_utils.h"
+
 #include <cstdlib>
 #include <filesystem>
 #include <format>
@@ -16,8 +18,7 @@ namespace backend {
 
 namespace {
 
-std::filesystem::path executableDir()
-{
+std::filesystem::path executableDir() {
 #ifdef _WIN32
     wchar_t buffer[MAX_PATH]{};
     const auto len = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
@@ -31,15 +32,12 @@ std::filesystem::path executableDir()
 }
 
 void appendCandidatePath(std::vector<std::filesystem::path>& candidates,
-                         const std::filesystem::path& baseDir,
-                         const std::filesystem::path& input)
-{
+                         const std::filesystem::path& baseDir, const std::filesystem::path& input) {
     candidates.push_back(baseDir / input);
     candidates.push_back(baseDir / "etc" / input);
 }
 
-std::vector<std::filesystem::path> buildCandidatePaths(const std::string& path)
-{
+std::vector<std::filesystem::path> buildCandidatePaths(const std::string& path) {
     std::vector<std::filesystem::path> candidates;
     const std::filesystem::path input(path);
 
@@ -63,8 +61,7 @@ std::vector<std::filesystem::path> buildCandidatePaths(const std::string& path)
     return candidates;
 }
 
-std::optional<std::string> readEnv(const char* name)
-{
+std::optional<std::string> readEnv(const char* name) {
 #ifdef _WIN32
     char* raw = nullptr;
     size_t size = 0;
@@ -89,15 +86,13 @@ std::optional<std::string> readEnv(const char* name)
     return value;
 }
 
-void overrideString(nlohmann::json& object, const char* key, const char* envName)
-{
+void overrideString(nlohmann::json& object, const char* key, const char* envName) {
     if (auto value = readEnv(envName)) {
         object[key] = *value;
     }
 }
 
-void overrideInt(nlohmann::json& object, const char* key, const char* envName)
-{
+void overrideInt(nlohmann::json& object, const char* key, const char* envName) {
     if (auto value = readEnv(envName)) {
         try {
             object[key] = std::stoi(*value);
@@ -106,8 +101,15 @@ void overrideInt(nlohmann::json& object, const char* key, const char* envName)
     }
 }
 
-void applyEnvOverrides(nlohmann::json& config)
-{
+void overrideBool(nlohmann::json& object, const char* key, const char* envName) {
+    if (auto value = readEnv(envName)) {
+        if (auto parsed = utils::parseBool(*value)) {
+            object[key] = *parsed;
+        }
+    }
+}
+
+void applyEnvOverrides(nlohmann::json& config) {
     auto& server = config["server"];
     if (!server.is_object()) {
         server = nlohmann::json::object();
@@ -128,8 +130,8 @@ void applyEnvOverrides(nlohmann::json& config)
         pythonService = nlohmann::json::object();
     }
 
-	auto& taskEngine = config["task_engine"];
-	if (!taskEngine.is_object()) {
+    auto& taskEngine = config["task_engine"];
+    if (!taskEngine.is_object()) {
         taskEngine = nlohmann::json::object();
     }
 
@@ -147,18 +149,19 @@ void applyEnvOverrides(nlohmann::json& config)
     overrideString(database, "username", "DB_USERNAME");
     overrideString(database, "password", "DB_PASSWORD");
     overrideString(database, "database", "DB_NAME");
+    overrideBool(database, "ssl", "DB_SSL");
 
     overrideString(jwt, "secret", "JWT_SECRET");
     overrideInt(jwt, "expiration_hours", "JWT_EXPIRATION_HOURS");
 
     overrideString(pythonService, "url", "PYTHON_SERVICE_URL");
     overrideInt(pythonService, "timeout_seconds", "PYTHON_SERVICE_TIMEOUT_SECONDS");
-    
+
     overrideInt(taskEngine, "workers", "TASK_ENGINE_WORKERS");
-	overrideInt(taskEngine, "poll_interval_ms", "TASK_ENGINE_POLL_INTERVAL_MS");
-	overrideInt(taskEngine, "lease_seconds", "TASK_ENGINE_LEASE_SECONDS");
-	overrideInt(taskEngine, "max_retries", "TASK_ENGINE_MAX_RETRIES");
-	overrideString(taskEngine, "worker_prefix", "TASK_ENGINE_WORKER_PREFIX");
+    overrideInt(taskEngine, "poll_interval_ms", "TASK_ENGINE_POLL_INTERVAL_MS");
+    overrideInt(taskEngine, "lease_seconds", "TASK_ENGINE_LEASE_SECONDS");
+    overrideInt(taskEngine, "max_retries", "TASK_ENGINE_MAX_RETRIES");
+    overrideString(taskEngine, "worker_prefix", "TASK_ENGINE_WORKER_PREFIX");
 
     overrideString(minio, "endpoint", "MINIO_ENDPOINT");
     overrideString(minio, "access_key", "MINIO_ACCESS_KEY");
@@ -170,8 +173,7 @@ void applyEnvOverrides(nlohmann::json& config)
 
 } // namespace
 
-nlohmann::json loadConfig(const std::string& path)
-{
+nlohmann::json loadConfig(const std::string& path) {
     auto candidates = buildCandidatePaths(path);
     const std::filesystem::path inputPath(path);
     if (inputPath.filename() == "config.json") {
@@ -204,12 +206,9 @@ nlohmann::json loadConfig(const std::string& path)
     throw std::runtime_error(message);
 }
 
-const nlohmann::json& cachedConfig()
-{
+const nlohmann::json& cachedConfig() {
     static const nlohmann::json config = loadConfig();
     return config;
 }
 
 } // namespace backend
-
-
