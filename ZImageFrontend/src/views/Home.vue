@@ -6,17 +6,13 @@
           <el-icon size="32"><Picture /></el-icon>
           AI Image Generator
         </h1>
-        
+
         <nav class="nav">
-          <el-menu
-            :default-active="activeTab"
-            mode="horizontal"
-            @select="handleTabChange"
-          >
+          <el-menu :default-active="activeTab" mode="horizontal" @select="handleTabChange">
             <el-menu-item index="generator">生成图像</el-menu-item>
             <el-menu-item index="history">我的作品</el-menu-item>
           </el-menu>
-          
+
           <!-- 用户信息 -->
           <div class="user-info">
             <el-dropdown @command="handleCommand">
@@ -57,42 +53,40 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { useAuthStore } from '@/stores/auth'
-import { Picture, Avatar, ArrowDown, SwitchButton } from '@element-plus/icons-vue'
-import { ElMessageBox } from 'element-plus'
-import ImageGenerator from '@/components/ImageGenerator.vue'
-import ImageHistory from '@/components/ImageHistory.vue'
+import { ref, onMounted } from 'vue';
+import { useAuthStore } from '@/stores/auth';
+import { Picture, Avatar, ArrowDown, SwitchButton } from '@element-plus/icons-vue';
+import { ElMessageBox } from 'element-plus';
+import ImageGenerator from '@/components/ImageGenerator.vue';
+import ImageHistory from '@/components/ImageHistory.vue';
 
-const authStore = useAuthStore()
-const activeTab = ref('generator')
+const authStore = useAuthStore();
+const activeTab = ref('generator');
 
 const handleTabChange = (key) => {
-  activeTab.value = key
-}
+  activeTab.value = key;
+};
 
 const handleCommand = (command) => {
   if (command === 'logout') {
-    ElMessageBox.confirm(
-      '确定要退出登录吗？',
-      '提示',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    ).then(() => {
-      authStore.logout()
-    }).catch(() => {
-      // 取消操作
+    ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
     })
+      .then(() => {
+        authStore.logout();
+      })
+      .catch(() => {
+        // 取消操作
+      });
   }
-}
+};
 
 onMounted(() => {
   // 检查登录状态
-  authStore.checkAuth()
-})
+  authStore.checkAuth();
+});
 </script>
 
 <style scoped>

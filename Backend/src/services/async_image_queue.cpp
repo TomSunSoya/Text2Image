@@ -6,14 +6,12 @@
 
 #include <spdlog/spdlog.h>
 
-AsyncImageQueue& AsyncImageQueue::instance()
-{
+AsyncImageQueue& AsyncImageQueue::instance() {
     static AsyncImageQueue queue;
     return queue;
 }
 
-void AsyncImageQueue::start(TaskHandler handler, std::size_t workerCount)
-{
+void AsyncImageQueue::start(TaskHandler handler, std::size_t workerCount) {
     std::lock_guard lock(mutex_);
     if (started_) {
         return;
@@ -33,8 +31,7 @@ void AsyncImageQueue::start(TaskHandler handler, std::size_t workerCount)
     started_ = true;
 }
 
-void AsyncImageQueue::enqueue(const models::ImageGeneration& generation)
-{
+void AsyncImageQueue::enqueue(const models::ImageGeneration& generation) {
     {
         std::lock_guard lock(mutex_);
         if (!started_) {
@@ -47,22 +44,18 @@ void AsyncImageQueue::enqueue(const models::ImageGeneration& generation)
     cv_.notify_one();
 }
 
-std::size_t AsyncImageQueue::pendingCount() const
-{
+std::size_t AsyncImageQueue::pendingCount() const {
     std::lock_guard lock(mutex_);
     return queue_.size();
 }
 
-void AsyncImageQueue::workerLoop(std::stop_token stopToken)
-{
+void AsyncImageQueue::workerLoop(std::stop_token stopToken) {
     while (!stopToken.stop_requested()) {
         models::ImageGeneration task;
 
         {
             std::unique_lock lock(mutex_);
-            cv_.wait(lock, stopToken, [this] {
-                return !queue_.empty();
-            });
+            cv_.wait(lock, stopToken, [this] { return !queue_.empty(); });
 
             if (stopToken.stop_requested() && queue_.empty()) {
                 return;

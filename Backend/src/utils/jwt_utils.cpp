@@ -12,30 +12,28 @@ namespace {
 
 using traits = jwt::traits::nlohmann_json;
 
-const std::string& loadSecret()
-{
+const std::string& loadSecret() {
     static const std::string secret = [] {
         const auto& config = backend::cachedConfig();
         auto value = config.at("jwt").at("secret").get<std::string>();
         if (value.empty()) {
-            throw std::runtime_error("jwt.secret is empty — set JWT_SECRET env var or update config.json");
+            throw std::runtime_error(
+                "jwt.secret is empty — set JWT_SECRET env var or update config.json");
         }
         return value;
     }();
     return secret;
 }
 
-std::string loadIssuer()
-{
+std::string loadIssuer() {
     return "backend";
 }
 
-}
+} // namespace
 
 namespace utils {
 
-std::string createToken(int64_t userId, const std::string& username)
-{
+std::string createToken(int64_t userId, const std::string& username) {
     return jwt::create<jwt::default_clock, traits>(jwt::default_clock{})
         .set_issuer(loadIssuer())
         .set_payload_claim("uid", traits::value_type(static_cast<traits::integer_type>(userId)))
@@ -43,14 +41,13 @@ std::string createToken(int64_t userId, const std::string& username)
         .sign(jwt::algorithm::hs256{loadSecret()});
 }
 
-std::optional<JwtPayload> verifyToken(const std::string& token)
-{
+std::optional<JwtPayload> verifyToken(const std::string& token) {
     try {
         auto decoded = jwt::decode<traits>(token);
 
         auto verifier = jwt::verify<jwt::default_clock, traits>(jwt::default_clock{})
-            .allow_algorithm(jwt::algorithm::hs256{loadSecret()})
-            .with_issuer(loadIssuer());
+                            .allow_algorithm(jwt::algorithm::hs256{loadSecret()})
+                            .with_issuer(loadIssuer());
 
         verifier.verify(decoded);
 
@@ -70,8 +67,7 @@ std::optional<JwtPayload> verifyToken(const std::string& token)
     }
 }
 
-std::optional<std::string> extractBearerToken(const drogon::HttpRequestPtr& req)
-{
+std::optional<std::string> extractBearerToken(const drogon::HttpRequestPtr& req) {
     const auto header = req->getHeader("Authorization");
     constexpr std::string_view prefix = "Bearer ";
 
@@ -86,4 +82,4 @@ std::optional<std::string> extractBearerToken(const drogon::HttpRequestPtr& req)
     return header.substr(prefix.size());
 }
 
-}
+} // namespace utils

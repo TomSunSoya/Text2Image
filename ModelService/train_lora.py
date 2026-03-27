@@ -17,14 +17,13 @@ class ImageCaptionDataset(Dataset):
         self.size = size
         self.data = []
 
-        for ext in ['*.png', '*.jpg', '*.jpeg']:
+        for ext in ["*.png", "*.jpg", "*.jpeg"]:
             for img_file in self.image_folder.glob(ext):
-                txt_file = img_file.with_suffix('.txt')
+                txt_file = img_file.with_suffix(".txt")
                 if txt_file.exists():
-                    self.data.append({
-                        'image': img_file,
-                        'caption': txt_file.read_text(encoding='utf-8').strip()
-                    })
+                    self.data.append(
+                        {"image": img_file, "caption": txt_file.read_text(encoding="utf-8").strip()}
+                    )
 
         print(f"找到 {len(self.data)} 个图片-文本对")
 
@@ -33,23 +32,20 @@ class ImageCaptionDataset(Dataset):
 
     def __getitem__(self, idx):
         item = self.data[idx]
-        image = Image.open(item['image']).convert('RGB')
+        image = Image.open(item["image"]).convert("RGB")
         image = image.resize((self.size, self.size))
-        return {
-            'image': image,
-            'caption': item['caption']
-        }
+        return {"image": image, "caption": item["caption"]}
 
 
 def train_lora(
-        model_path="C:/Users/pc1/.cache/modelscope/hub/models/Tongyi-MAI/Z-Image-Turbo",
-        data_folder="./training_images",
-        output_dir="./lora_output",
-        num_epochs=100,
-        batch_size=1,
-        learning_rate=1e-4,
-        lora_rank=16,  # 5070Ti 建议从16开始
-        lora_alpha=16,
+    model_path="C:/Users/pc1/.cache/modelscope/hub/models/Tongyi-MAI/Z-Image-Turbo",
+    data_folder="./training_images",
+    output_dir="./lora_output",
+    num_epochs=100,
+    batch_size=1,
+    learning_rate=1e-4,
+    lora_rank=16,  # 5070Ti 建议从16开始
+    lora_alpha=16,
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -73,8 +69,10 @@ def train_lora(
     # 查找 transformer 中的注意力层模块名
     target_modules = []
     for name, module in pipe.transformer.named_modules():
-        if 'attn' in name.lower() and ('to_q' in name or 'to_k' in name or 'to_v' in name or 'to_out' in name):
-            module_name = name.split('.')[-1]
+        if "attn" in name.lower() and (
+            "to_q" in name or "to_k" in name or "to_v" in name or "to_out" in name
+        ):
+            module_name = name.split(".")[-1]
             if module_name not in target_modules:
                 target_modules.append(module_name)
 
@@ -112,10 +110,7 @@ def train_lora(
 
     # 4. 优化器
     optimizer = torch.optim.AdamW(
-        pipe.transformer.parameters(),
-        lr=learning_rate,
-        betas=(0.9, 0.999),
-        weight_decay=0.01
+        pipe.transformer.parameters(), lr=learning_rate, betas=(0.9, 0.999), weight_decay=0.01
     )
 
     # 5. 训练循环
@@ -130,14 +125,16 @@ def train_lora(
 
         for step, batch in enumerate(progress_bar):
             try:
-                images = batch['image']
-                captions = batch['caption']
+                images = batch["image"]
+                captions = batch["caption"]
 
                 # 图像转 tensor
-                pixel_values = torch.stack([
-                    torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 127.5 - 1.0
-                    for img in images
-                ]).to("cuda", dtype=torch.bfloat16)
+                pixel_values = torch.stack(
+                    [
+                        torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 127.5 - 1.0
+                        for img in images
+                    ]
+                ).to("cuda", dtype=torch.bfloat16)
 
                 # VAE 编码
                 with torch.no_grad():
@@ -151,7 +148,7 @@ def train_lora(
                         padding="max_length",
                         max_length=pipe.tokenizer.model_max_length,
                         truncation=True,
-                        return_tensors="pt"
+                        return_tensors="pt",
                     ).to("cuda")
 
                     text_embeddings = pipe.text_encoder(text_inputs.input_ids)[0]
@@ -160,9 +157,7 @@ def train_lora(
                 noise = torch.randn_like(latents)
                 bsz = latents.shape[0]
                 timesteps = torch.randint(
-                    0, pipe.scheduler.config.num_train_timesteps,
-                    (bsz,),
-                    device=latents.device
+                    0, pipe.scheduler.config.num_train_timesteps, (bsz,), device=latents.device
                 ).long()
 
                 noisy_latents = pipe.scheduler.add_noise(latents, noise, timesteps)
@@ -184,7 +179,7 @@ def train_lora(
                 optimizer.step()
 
                 epoch_loss += loss.item()
-                progress_bar.set_postfix({'loss': f'{loss.item():.4f}'})
+                progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
 
             except Exception as e:
                 print(f"\n步骤 {step} 出错: {e}")
@@ -205,7 +200,7 @@ def train_lora(
             pipe.transformer.eval()
             with torch.no_grad():
                 test_image = pipe(
-                    prompt=dataset.data[0]['caption'],
+                    prompt=dataset.data[0]["caption"],
                     num_inference_steps=8,
                     guidance_scale=0.0,
                     height=768,

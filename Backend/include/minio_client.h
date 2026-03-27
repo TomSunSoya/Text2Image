@@ -4,7 +4,7 @@
 #include <string>
 
 class MinioClient {
-public:
+  public:
     struct Config {
         std::string endpoint;
         std::string access_key;
@@ -27,8 +27,10 @@ public:
 
     bool ensureBucketExists() const;
 
-    const Config& config() const { return config_; }
+    const Config& config() const {
+        return config_;
+    }
 
-private:
+  private:
     Config config_;
 };

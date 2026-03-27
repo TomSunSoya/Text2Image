@@ -1,8 +1,7 @@
 #include <gtest/gtest.h>
 #include "jwt_utils.h"
 
-TEST(JWT, CreateAndVerifyRoundTrip)
-{
+TEST(JWT, CreateAndVerifyRoundTrip) {
     auto token = utils::createToken(42, "testuser");
     EXPECT_FALSE(token.empty());
 
@@ -12,15 +11,13 @@ TEST(JWT, CreateAndVerifyRoundTrip)
     EXPECT_EQ(payload->username, "testuser");
 }
 
-TEST(JWT, DifferentUsersProduceDifferentTokens)
-{
+TEST(JWT, DifferentUsersProduceDifferentTokens) {
     auto t1 = utils::createToken(1, "alice");
     auto t2 = utils::createToken(2, "bob");
     EXPECT_NE(t1, t2);
 }
 
-TEST(JWT, VerifyPreservesLargeUserId)
-{
+TEST(JWT, VerifyPreservesLargeUserId) {
     const int64_t largeId = 9'000'000'000LL;
     auto token = utils::createToken(largeId, "bigid");
     auto payload = utils::verifyToken(token);
@@ -28,15 +25,13 @@ TEST(JWT, VerifyPreservesLargeUserId)
     EXPECT_EQ(payload->user_id, largeId);
 }
 
-TEST(JWT, InvalidTokenReturnsNullopt)
-{
+TEST(JWT, InvalidTokenReturnsNullopt) {
     EXPECT_FALSE(utils::verifyToken("").has_value());
     EXPECT_FALSE(utils::verifyToken("not.a.jwt").has_value());
     EXPECT_FALSE(utils::verifyToken("abc").has_value());
 }
 
-TEST(JWT, TamperedTokenReturnsNullopt)
-{
+TEST(JWT, TamperedTokenReturnsNullopt) {
     auto token = utils::createToken(1, "user");
     ASSERT_FALSE(token.empty());
 
@@ -45,8 +40,7 @@ TEST(JWT, TamperedTokenReturnsNullopt)
     EXPECT_FALSE(utils::verifyToken(token).has_value());
 }
 
-TEST(JWT, TruncatedTokenReturnsNullopt)
-{
+TEST(JWT, TruncatedTokenReturnsNullopt) {
     auto token = utils::createToken(1, "user");
     token = token.substr(0, token.size() / 2);
     EXPECT_FALSE(utils::verifyToken(token).has_value());

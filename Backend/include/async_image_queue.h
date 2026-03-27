@@ -12,7 +12,7 @@
 #include "image_generation.h"
 
 class AsyncImageQueue {
-public:
+  public:
     using TaskHandler = std::function<void(const models::ImageGeneration&)>;
 
     static AsyncImageQueue& instance();
@@ -26,7 +26,7 @@ public:
     AsyncImageQueue(const AsyncImageQueue&) = delete;
     AsyncImageQueue& operator=(const AsyncImageQueue&) = delete;
 
-private:
+  private:
     AsyncImageQueue() = default;
 
     void workerLoop(std::stop_token stopToken);
