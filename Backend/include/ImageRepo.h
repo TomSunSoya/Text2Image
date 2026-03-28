@@ -28,6 +28,10 @@ class ImageRepo {
                                                                     int64_t userId);
     std::optional<models::ImageGeneration> claimNextTask(const std::string& workerId,
                                                          long leaseSeconds);
+    std::optional<models::ImageGeneration>
+    claimTaskById(int64_t taskId, const std::string& workerId, long leaseSeconds);
+    std::vector<int64_t> findQueuedTaskIds();
+    std::vector<int64_t> expireLeasesReturningIds();
     bool renewLease(int64_t id, int64_t userId, const std::string& workerId, long leaseSeconds);
 
     bool finishClaimedTask(const models::ImageGeneration& generation);

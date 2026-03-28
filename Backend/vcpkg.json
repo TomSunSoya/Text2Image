@@ -9,6 +9,7 @@
     "jwt-cpp",
     "mysql-connector-cpp",
     "minio-cpp",
-    "gtest"
+    "gtest",
+    "redis-plus-plus"
   ]
 }

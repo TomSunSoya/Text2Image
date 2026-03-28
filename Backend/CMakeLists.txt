@@ -31,6 +31,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(jwt-cpp CONFIG REQUIRED)
 # vcpkg: mysql-connector-cpp，经典 C++ API 用 mysql::concpp-jdbc，X DevAPI 用 mysql::concpp
 find_package(unofficial-mysql-connector-cpp CONFIG REQUIRED)
+find_package(hiredis CONFIG REQUIRED)
+find_package(redis++ CONFIG REQUIRED)
 
 
 find_package(miniocpp REQUIRED)
@@ -56,6 +58,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     jwt-cpp::jwt-cpp
     unofficial::mysql-connector-cpp::connector
     miniocpp::miniocpp
+    redis++::redis++
+    hiredis::hiredis
 )
 
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)

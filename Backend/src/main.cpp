@@ -10,6 +10,7 @@
 #include "db_manager.h"
 #include "image_service.h"
 #include "minio_client.h"
+#include "redis_client.h"
 
 int main() {
     try {
@@ -29,6 +30,24 @@ int main() {
                     return 1;
                 }
             }
+        }
+
+        // --- Redis initialization ---
+        try {
+            if (config.contains("redis") && config.at("redis").is_object()) {
+                auto redisConfig = redis::parseRedisConfig(config.at("redis"));
+                if (redisConfig.enabled) {
+                    redis::RedisClient::init(redisConfig);
+                    if (redis::RedisClient::instance().ping())
+                        spdlog::info("Redis ready: {}:{}", redisConfig.host, redisConfig.port);
+                    else
+                        spdlog::warn("Redis ping failed - falling back to DB polling");
+                } else {
+                    spdlog::info("Redis disabled by configuration");
+                }
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("Redis init failed: {} - falling back to polling", e.what());
         }
 
         const auto mysqlConfig = database::parseMysqlConfig(dbConfig);
