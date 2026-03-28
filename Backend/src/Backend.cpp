@@ -163,6 +163,22 @@ void applyEnvOverrides(nlohmann::json& config) {
         minio = nlohmann::json::object();
     }
 
+    auto& redis = config["redis"];
+    if (!redis.is_object()) {
+        redis = nlohmann::json::object();
+    }
+
+    overrideString(redis, "host", "REDIS_HOST");
+    overrideInt(redis, "port", "REDIS_PORT");
+    overrideString(redis, "password", "REDIS_PASSWORD");
+    overrideInt(redis, "db", "REDIS_DB");
+    overrideInt(redis, "pool_size", "REDIS_POOL_SIZE");
+    overrideInt(redis, "connect_timeout_ms", "REDIS_CONNECT_TIMEOUT_MS");
+    overrideInt(redis, "socket_timeout_ms", "REDIS_SOCKET_TIMEOUT_MS");
+    overrideString(redis, "task_queue_key", "REDIS_TASK_QUEUE_KEY");
+    overrideString(redis, "lease_key_prefix", "REDIS_LEASE_KEY_PREFIX");
+    overrideBool(redis, "enabled", "REDIS_ENABLED");
+
     overrideString(server, "host", "BACKEND_HOST");
     overrideInt(server, "port", "BACKEND_PORT");
     overrideInt(server, "threads", "BACKEND_THREADS");

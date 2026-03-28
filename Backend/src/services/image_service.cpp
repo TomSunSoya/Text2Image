@@ -19,6 +19,7 @@
 #include "image_storage.h"
 #include "task_event_hub.h"
 #include "task_state_machine.h"
+#include "redis_client.h"
 
 namespace {
 
@@ -27,10 +28,14 @@ using Clock = std::chrono::system_clock;
 struct TaskEngineConfig {
     int workers{1};
     int poll_interval_ms{500};
-    long lease_seconds{600};
+    long lease_seconds{900};
     int max_retries{3};
     std::string worker_prefix{"backend-worker"};
 };
+
+models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation);
+void persistGeneratedImage(models::ImageGeneration& generation);
+void cleanupOrphanedStoredImage(const models::ImageGeneration& generation);
 
 TaskEngineConfig loadTaskEngineConfig() {
     TaskEngineConfig config;
@@ -89,6 +94,18 @@ void notifyWorkers() {
     taskNotifyCv().notify_one();
 }
 
+void enqueueAndNotify(int64_t taskId) {
+    try {
+        auto& r = redis::RedisClient::instance();
+        if (r.isAvailable()) {
+            r.enqueueTask(taskId);
+            return;     // BRPOP will awake worker
+        }
+    } catch (...) {
+    }
+    notifyWorkers();
+}
+
 std::chrono::seconds leaseRenewInterval(long leaseSeconds) {
     return std::chrono::seconds((std::max)(1l, leaseSeconds / 2));
 }
@@ -113,6 +130,17 @@ std::jthread startLeaseKeeper(const models::ImageGeneration& task, const std::st
                 continue;
             }
 
+            // redis renew
+            try {
+                auto& r = redis::RedisClient::instance();
+                if (r.isAvailable() && !r.renewLease(taskId, workerId, leaseSeconds)) {
+                    spdlog::warn("Redis lease lost id = {}, worker_id = {}", taskId, workerId);
+                    break;
+                }
+            } catch (...) {
+                spdlog::info("Redis is unavailable, start MySQL renew");
+            }
+
             try {
                 if (!repo.renewLease(taskId, userId, workerId, leaseSeconds)) {
                     spdlog::warn("lease keeper lost task claim id={}, user_id={}, worker_id={}",
@@ -132,6 +160,34 @@ std::jthread startLeaseKeeper(const models::ImageGeneration& task, const std::st
             nextRenewal = now + renewEvery;
         }
     });
+}
+
+void processClaimedTask(ImageRepo& repo, models::ImageGeneration &task, const std::string &workerId, const TaskEngineConfig &config
+) {
+    spdlog::info("task worker claimed task id = {}, user_id = {}, request_id = {}, worker_id = {}",
+                 task.id, task.user_id, task.request_id, workerId);
+    TaskEventHub::instance().publishTaskUpdated(task);
+
+    auto leaseKeeper = startLeaseKeeper(task, workerId, config.lease_seconds);
+    auto result = runRemoteGeneration(task);
+    persistGeneratedImage(result);
+    const bool finished = repo.finishClaimedTask(result);
+    leaseKeeper.request_stop();
+
+    // release Redis lease
+    try {
+        auto& r = redis::RedisClient::instance();
+        if (r.isAvailable())
+            r.releaseLease(task.id, workerId);
+    } catch (...) {
+    }
+
+    if (!finished) {
+        cleanupOrphanedStoredImage(result);
+        spdlog::warn("task worker failed to finish claimed task id = {}", task.id);
+    } else {
+        TaskEventHub::instance().publishTaskUpdated(result);
+    }
 }
 
 void cleanupOrphanedStoredImage(const models::ImageGeneration& generation) {
@@ -249,7 +305,7 @@ void mergeRemoteResult(const nlohmann::json& remoteJson, models::ImageGeneration
 }
 
 models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation) {
-    long timeoutSeconds = 300;
+    long timeoutSeconds = 900;
     std::string serviceUrl;
 
     try {
@@ -257,7 +313,7 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation) 
         const auto& serviceConfig = config.at("python_service");
 
         serviceUrl = serviceConfig.at("url").get<std::string>();
-        timeoutSeconds = serviceConfig.value("timeout_seconds", 300);
+        timeoutSeconds = serviceConfig.value("timeout_seconds", 900);
 
         nlohmann::json modelPayload = {
             {"prompt", generation.prompt},       {"negative_prompt", generation.negative_prompt},
@@ -379,34 +435,37 @@ void workerLoop(std::stop_token stopToken, const std::string& workerId,
 
     while (!stopToken.stop_requested()) {
         try {
-            auto task = repo.claimNextTask(workerId, config.lease_seconds);
-            if (!task) {
-                // Wait on condition variable instead of blind sleep.
-                // Wakes up when create()/retryById() notify, or after
-                // poll_interval_ms as fallback. stop_token is checked
-                // by the outer while loop on next iteration.
-                std::unique_lock lock(taskNotifyMutex());
-                taskNotifyCv().wait_for(lock, std::chrono::milliseconds(config.poll_interval_ms));
-                continue;
-            }
+            auto& r = redis::RedisClient::instance();
+            const bool redisUp = r.isAvailable();
 
-            spdlog::info("task worker claimed task id={}, user_id={}, request_id={}, worker_id={}",
-                         task->id, task->user_id, task->request_id, workerId);
-            TaskEventHub::instance().publishTaskUpdated(*task);
+            if (redisUp) {
+                auto taskId = r.dequeueTask(std::chrono::seconds(1));
+                if (!taskId)
+                    continue;
 
-            auto leaseKeeper = startLeaseKeeper(*task, workerId, config.lease_seconds);
-            auto result = runRemoteGeneration(*task);
-            persistGeneratedImage(result);
-            const bool finished = repo.finishClaimedTask(result);
-            leaseKeeper.request_stop();
-
-            if (!finished) {
-                cleanupOrphanedStoredImage(result);
-                spdlog::warn(
-                    "task worker failed to finish claimed task id={}, user_id={}, worker_id={}",
-                    task->id, task->user_id, workerId);
+                if (!r.acquireLease(*taskId, workerId, config.lease_seconds)) {
+                    spdlog::debug("worker {} lost lease race for task {}", workerId, *taskId);
+                    continue;
+                }
+                auto task = repo.claimTaskById(*taskId, workerId, config.lease_seconds);
+                if (!task) {
+                    r.releaseLease(*taskId, workerId);
+                    continue;  // job has been cancelled/removed
+                }
+                processClaimedTask(repo, *task, workerId, config);
             } else {
-                TaskEventHub::instance().publishTaskUpdated(result);
+                auto task = repo.claimNextTask(workerId, config.lease_seconds);
+                if (!task) {
+                    // Wait on condition variable instead of blind sleep.
+                    // Wakes up when create()/retryById() notify, or after
+                    // poll_interval_ms as fallback. stop_token is checked
+                    // by the outer while loop on next iteration.
+                    std::unique_lock lock(taskNotifyMutex());
+                    taskNotifyCv().wait_for(lock,
+                                            std::chrono::milliseconds(config.poll_interval_ms));
+                    continue;
+                }
+                processClaimedTask(repo, *task, workerId, config);
             }
         } catch (const std::exception& ex) {
             spdlog::error("task worker exception: {}, worker_id={}", ex.what(), workerId);
@@ -427,14 +486,32 @@ void leaseExpiryLoop(std::stop_token stopToken, int intervalSeconds) {
             break;
 
         try {
-            int expired = repo.expireLeases();
-            if (expired > 0) {
-                spdlog::info("lease expiry scanner recovered {} task(s)", expired);
-                notifyWorkers();
+            auto recoveredIds = repo.expireLeasesReturningIds();
+            if (!recoveredIds.empty()) {
+                spdlog::info("lease expiry scanner recovered {} task(s)", recoveredIds.size());
+                for (auto id : recoveredIds)
+                    enqueueAndNotify(id);
             }
         } catch (const std::exception& ex) {
             spdlog::error("lease expiry scanner error: {}", ex.what());
         }
+    }
+}
+
+void recoverOrphanedTasks() {
+    try {
+        auto& r = redis::RedisClient::instance();
+        if (!r.isAvailable())
+            return;
+
+        ImageRepo repo;
+        auto ids = repo.findQueuedTaskIds();
+        r.rebuildTaskQueue(ids);
+
+        if (!ids.empty())
+            spdlog::info("Recovered {} orphaned queued task(s) into Redis", ids.size());
+    } catch (const std::exception& ex) {
+        spdlog::warn("Failed to recover orphaned tasks: {}", ex.what());
     }
 }
 
@@ -445,6 +522,8 @@ void ensureWorkersStarted() {
             spdlog::info("ImageService task engine disabled");
             return;
         }
+
+        recoverOrphanedTasks();
 
         auto& workers = taskWorkers();
         // +1 for the lease expiry scanner thread
@@ -529,6 +608,19 @@ std::optional<ServiceError> validateGenerationParams(models::ImageGeneration& ge
     return std::nullopt;
 }
 
+void presignListImages(std::vector<models::ImageGeneration>& images) {
+    try {
+        ImageStorage storage;
+        for (auto& img : images) {
+            if (!img.storage_key.empty()) {
+                try {
+                    img.image_url = storage.presignUrl(img.storage_key);
+                } catch (...) {}
+            }
+        }
+    } catch (...) {}
+}
+
 } // namespace
 
 void ImageService::bootstrapWorkers() {
@@ -572,7 +664,7 @@ ImageService::create(int64_t userId, const nlohmann::json& payload) const {
         generation.id = repo.insert(generation);
         TaskEventHub::instance().publishTaskUpdated(generation);
         ensureWorkersStarted();
-        notifyWorkers();
+        enqueueAndNotify(generation.id);
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::create persist error: {}", ex.what());
         return std::unexpected(ServiceError{drogon::k500InternalServerError,
@@ -593,6 +685,7 @@ std::expected<ImageListResult, ServiceError> ImageService::listMy(int64_t userId
     try {
         ImageRepo repo;
         auto result = repo.findByUserId(userId, page, size);
+        presignListImages(result.content);
         return ImageListResult{std::move(result.content), result.total_elements};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::listMy error: {}", ex.what());
@@ -614,6 +707,7 @@ ImageService::listMyByStatus(int64_t userId, const std::string& status, int page
     try {
         ImageRepo repo;
         auto result = repo.findByUserIdAndStatus(userId, target, page, size);
+        presignListImages(result.content);
         return ImageListResult{std::move(result.content), result.total_elements};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::listMyByStatus error: {}", ex.what());
@@ -685,6 +779,23 @@ std::expected<ImageGetResult, ServiceError> ImageService::cancelById(int64_t use
                                                 "task cannot be canceled"});
         }
 
+        try {
+            auto& r = redis::RedisClient::instance();
+            if (r.isAvailable()) {
+                std::ignore = r.removeFromQueue(id);
+                r.forceReleaseLease(id);
+            }
+        } catch (const std::exception& ex) {
+            spdlog::warn("ImageService::cancelById Redis cleanup failed, id={}, user_id={}, "
+                         "reason={}",
+                         id, userId, ex.what());
+        } catch (...) {
+            spdlog::warn("ImageService::cancelById Redis cleanup failed, id={}, user_id={}, "
+                         "reason=unknown",
+                         id, userId);
+        }
+
+
         TaskEventHub::instance().publishTaskUpdated(updated);
         return ImageGetResult{updated};
     } catch (const std::exception& ex) {
@@ -726,7 +837,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::retryById(int64_t user
 
         TaskEventHub::instance().publishTaskUpdated(updated);
         ensureWorkersStarted();
-        notifyWorkers();
+        enqueueAndNotify(id);
         return ImageGetResult{updated};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::retryById error: {}", ex.what());
