@@ -12,6 +12,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <tuple>
 
 #include "Backend.h"
 #include "ImageRepo.h"
@@ -101,7 +102,10 @@ void enqueueAndNotify(int64_t taskId) {
             r.enqueueTask(taskId);
             return;     // BRPOP will awake worker
         }
+    } catch (const std::exception& ex) {
+        spdlog::warn("Failed to enqueue task {} to Redis: {}", taskId, ex.what());
     } catch (...) {
+        spdlog::warn("Failed to enqueue task {} to Redis: unknown exception", taskId);
     }
     notifyWorkers();
 }
@@ -135,7 +139,6 @@ std::jthread startLeaseKeeper(const models::ImageGeneration& task, const std::st
                 auto& r = redis::RedisClient::instance();
                 if (r.isAvailable() && !r.renewLease(taskId, workerId, leaseSeconds)) {
                     spdlog::warn("Redis lease lost id = {}, worker_id = {}", taskId, workerId);
-                    break;
                 }
             } catch (...) {
                 spdlog::info("Redis is unavailable, start MySQL renew");
@@ -162,8 +165,8 @@ std::jthread startLeaseKeeper(const models::ImageGeneration& task, const std::st
     });
 }
 
-void processClaimedTask(ImageRepo& repo, models::ImageGeneration &task, const std::string &workerId, const TaskEngineConfig &config
-) {
+void processClaimedTask(ImageRepo& repo, models::ImageGeneration& task,
+                        const std::string& workerId, const TaskEngineConfig& config) {
     spdlog::info("task worker claimed task id = {}, user_id = {}, request_id = {}, worker_id = {}",
                  task.id, task.user_id, task.request_id, workerId);
     TaskEventHub::instance().publishTaskUpdated(task);
@@ -615,10 +618,20 @@ void presignListImages(std::vector<models::ImageGeneration>& images) {
             if (!img.storage_key.empty()) {
                 try {
                     img.image_url = storage.presignUrl(img.storage_key);
-                } catch (...) {}
+                } catch (const std::exception& ex) {
+                    spdlog::error("presignListImages: failed to presign storage_key='{}': {}",
+                                  img.storage_key, ex.what());
+                } catch (...) {
+                    spdlog::error("presignListImages: unknown error for storage_key='{}'",
+                                  img.storage_key);
+                }
             }
         }
-    } catch (...) {}
+    } catch (const std::exception& ex) {
+        spdlog::error("presignListImages: storage init failed: {}", ex.what());
+    } catch (...) {
+        spdlog::error("presignListImages: unknown error during storage init");
+    }
 }
 
 } // namespace
@@ -794,7 +807,6 @@ std::expected<ImageGetResult, ServiceError> ImageService::cancelById(int64_t use
                          "reason=unknown",
                          id, userId);
         }
-
 
         TaskEventHub::instance().publishTaskUpdated(updated);
         return ImageGetResult{updated};

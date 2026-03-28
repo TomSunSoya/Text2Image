@@ -1,6 +1,7 @@
 #include "redis_client.h"
 
 #include <algorithm>
+#include <tuple>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <sw/redis++/redis++.h>
