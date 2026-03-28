@@ -468,7 +468,7 @@ std::optional<models::ImageGeneration> ImageRepo::claimNextTask(const std::strin
     ensureTable();
 
     const auto now = std::chrono::system_clock::now();
-    const auto expiresAt = now + std::chrono::seconds(leaseSeconds <= 0 ? 300 : leaseSeconds);
+    const auto expiresAt = now + std::chrono::seconds(leaseSeconds <= 0 ? 900 : leaseSeconds);
     const auto nowText = timeToDbString(now);
     const auto expiresAtText = timeToDbString(expiresAt);
 
@@ -515,12 +515,82 @@ std::optional<models::ImageGeneration> ImageRepo::claimNextTask(const std::strin
     return rowToImageGeneration(row);
 }
 
+std::optional<models::ImageGeneration>
+ImageRepo::claimTaskById(int64_t taskId, const std::string& workerId, long leaseSeconds) {
+    ensureTable();
+
+    const auto now = std::chrono::system_clock::now();
+    const auto expiresAt = now + std::chrono::seconds(leaseSeconds <= 0 ? 900 : leaseSeconds);
+    const auto nowText = timeToDbString(now);
+    const auto expiresAtText = timeToDbString(expiresAt);
+
+    auto update = database::DBManager::threadSession()
+                      .sql("UPDATE " + imageTableName() +
+                           " SET status = 'generating', worker_id = ?, "
+                           "     started_at = IFNULL(started_at, ?), "
+                           "     lease_expires_at = ?, failure_code = '', error_message = ''"
+                           " WHERE id = ? AND status IN ('queued', 'pending')")
+                      .bind(workerId, nowText, expiresAtText, taskId)
+                      .execute();
+
+    if (update.getAffectedItemsCount() == 0)
+        return std::nullopt;
+
+    auto select = database::DBManager::threadSession()
+                      .sql(std::string("SELECT ") + kColumns + " FROM " + imageTableName() +
+                           " WHERE id = ? AND worker_id = ? AND status = 'generating'")
+                      .bind(taskId, workerId)
+                      .execute();
+
+    auto row = select.fetchOne();
+    if (!row)
+        return std::nullopt;
+    return rowToImageGeneration(row);
+}
+
+std::vector<int64_t> ImageRepo::findQueuedTaskIds() {
+    ensureTable();
+    auto result = database::DBManager::threadSession()
+                      .sql("SELECT id FROM " + imageTableName() +
+                           " WHERE status IN ('queued', 'pending') ORDER BY created_at ASC, id ASC")
+                      .execute();
+
+    std::vector<int64_t> ids;
+    while (auto row = result.fetchOne()) {
+        ids.push_back(static_cast<int64_t>(row[0].get<uint64_t>()));
+    }
+    return ids;
+}
+
+std::vector<int64_t> ImageRepo::expireLeasesReturningIds() {
+    ensureTable();
+    const auto nowText = timeToDbString(std::chrono::system_clock::now());
+
+    // 先查出可重试的 ID
+    auto selectRequeue = database::DBManager::threadSession()
+                             .sql("SELECT id FROM " + imageTableName() +
+                                  " WHERE status = 'generating' AND lease_expires_at IS NOT NULL"
+                                  "   AND lease_expires_at < ? AND retry_count < max_retries")
+                             .bind(nowText)
+                             .execute();
+
+    std::vector<int64_t> requeuedIds;
+    while (auto row = selectRequeue.fetchOne()) {
+        requeuedIds.push_back(static_cast<int64_t>(row[0].get<uint64_t>()));
+    }
+
+    // 执行原有的 expireLeases 逻辑
+    expireLeases();
+
+    return requeuedIds;
+}
+
 bool ImageRepo::renewLease(int64_t id, int64_t userId, const std::string& workerId,
                            long leaseSeconds) {
     ensureTable();
 
     const auto now = std::chrono::system_clock::now();
-    const auto expiresAt = now + std::chrono::seconds(leaseSeconds <= 0 ? 300 : leaseSeconds);
+    const auto expiresAt = now + std::chrono::seconds(leaseSeconds <= 0 ? 900 : leaseSeconds);
     const auto expiresAtText = timeToDbString(expiresAt);
 
     auto result =
