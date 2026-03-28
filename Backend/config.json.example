@@ -21,12 +21,12 @@
   },
   "python_service": {
     "url": "http://localhost:8081",
-    "timeout_seconds": 360
+    "timeout_seconds": 900
   },
   "task_engine": {
     "workers": 2,
     "poll_interval_ms": 500,
-    "lease_seconds": 600,
+    "lease_seconds": 900,
     "max_retries": 3,
     "worker_prefix": "backend-worker"
   },
@@ -37,7 +37,7 @@
     "allow_headers": [ "Content-Type", "Authorization" ]
   },
   "minio": {
-    "endpoint": "http://localhost:9000",
+    "endpoint": "http://127.0.0.1:9000",
     "access_key": "minioadmin",
     "secret_key": "minioadmin",
     "bucket": "zimage",
@@ -48,5 +48,17 @@
     "root_dir": "storage/images",
     "public_url_prefix": "/api/images",
     "extension": "png"
-  }
+  },
+  "redis": {
+    "host": "127.0.0.1",
+    "port": 6379,
+    "password": "",
+    "db": 0,
+    "pool_size": 4,
+    "connect_timeout_ms": 1000,
+    "socket_timeout_ms": 5000,
+    "task_queue_key": "zimage:task_queue",
+    "lease_key_prefix": "zimage:lease:",
+    "enabled": true
+}
 }
