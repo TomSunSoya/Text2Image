@@ -46,7 +46,7 @@ int main() {
                     spdlog::info("Redis disabled by configuration");
                 }
             }
-        } catch (std::exception& e) {
+        } catch (const std::exception& e) {
             spdlog::warn("Redis init failed: {} - falling back to polling", e.what());
         }
 
@@ -59,6 +59,7 @@ int main() {
         } catch (const std::exception& e) {
             spdlog::warn("Database initialization failed: {}", e.what());
         }
+
         // --- MinIO initialization ---
         try {
             const auto& minioConfig = config.at("minio");
