@@ -181,6 +181,16 @@ Required tools:
 - `node` / `npx`
 - `python` plus `black` and `ruff`
 
+### 6.6 CI Baseline
+The repository now includes `.github/workflows/ci.yml` with a lightweight default pipeline:
+
+- frontend: `npm ci` + `npm run build`
+- backend: Docker-based Linux build that runs `UnitTests` and `IntegrationTests`
+- model service: Python entrypoint compile smoke check
+- docker: `docker compose config` plus runtime image builds for `Backend/` and `ZImageFrontend/`
+
+Heavyweight model-image validation is intentionally split into `.github/workflows/model-service-image.yml`, so the default CI stays stable and reasonably fast.
+
 ## 7. Configuration
 
 ### 7.1 Backend
@@ -245,6 +255,8 @@ The repository now includes:
 - `ZImageFrontend/nginx.conf` for SPA hosting plus backend/API/WebSocket reverse proxy
 - `ModelService/requirements.txt` for Python image builds
 - frontend dev proxy targets configurable via `VITE_BACKEND_PROXY_TARGET` and `VITE_HEALTH_PROXY_TARGET`
+- GitHub Actions CI for frontend build, backend tests, and Docker validation
+- dedicated model-service image workflow for heavyweight runtime image builds
 
 ## 8. Current State
 
@@ -259,7 +271,7 @@ What is already in place:
 
 What is not yet finished:
 
-- standardized automated tests across all three projects
+- end-to-end automated tests across all three projects
 - production-grade secrets/config management
 - structured observability and metrics
 - deployment packaging and one-command local bootstrap
