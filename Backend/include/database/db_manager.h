@@ -8,8 +8,8 @@
 #include <mysqlx/xdevapi.h>
 #include <nlohmann/json.hpp>
 
-#include "user.h"
-#include "image_generation.h"
+#include "models/user.h"
+#include "models/image_generation.h"
 
 namespace database {
 
@@ -29,6 +29,7 @@ class DBManager {
   public:
     static void init(const MysqlConfig& cfg);
     static const MysqlConfig& config();
+    static bool isHealthy();
     static mysqlx::Session& session();
     static mysqlx::Session& threadSession();
     static mysqlx::Schema schema();

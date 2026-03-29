@@ -1,4 +1,4 @@
-#include "image_storage.h"
+#include "models/image_storage.h"
 
 #include <cctype>
 #include <format>
@@ -8,7 +8,7 @@
 #include <spdlog/spdlog.h>
 
 #include "Backend.h"
-#include "minio_client.h"
+#include "services/minio_client.h"
 
 namespace {
 

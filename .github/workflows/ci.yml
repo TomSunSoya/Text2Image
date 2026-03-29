@@ -1,0 +1,168 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ZImageFrontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ZImageFrontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+  backend-docker:
+    name: Backend Docker Build and Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Expose GitHub Actions cache for Docker
+        uses: crazy-max/ghaction-github-runtime@v3
+
+      - name: Build backend test image and run unit tests
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Backend
+          target: unit-tests
+          load: true
+          tags: zimage-backend-unit-tests
+          build-args: |
+            VCPKG_BINARY_SOURCES=clear;x-gha,readwrite
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Start MySQL for integration tests
+        run: |
+          docker run -d --name zimage-mysql-ci \
+            -e MYSQL_ROOT_PASSWORD=CHANGE_ME_ROOT \
+            -e MYSQL_DATABASE=image_generator \
+            -e MYSQL_USER=app \
+            -e MYSQL_PASSWORD=CHANGE_ME \
+            -p 33060:33060 \
+            --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p\$MYSQL_ROOT_PASSWORD --silent" \
+            --health-interval=5s \
+            --health-timeout=5s \
+            --health-retries=30 \
+            mysql:8.4 \
+            --mysqlx=ON \
+            --character-set-server=utf8mb4 \
+            --collation-server=utf8mb4_unicode_ci
+
+      - name: Wait for MySQL health
+        run: |
+          for i in $(seq 1 60); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' zimage-mysql-ci)
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs zimage-mysql-ci
+          exit 1
+
+      - name: Run backend integration tests
+        run: |
+          docker run --rm --network host \
+            -e TEST_DB_HOST=127.0.0.1 \
+            -e TEST_DB_PORT=33060 \
+            -e TEST_DB_USERNAME=root \
+            -e TEST_DB_PASSWORD=CHANGE_ME_ROOT \
+            -e JWT_SECRET=ci-jwt-secret \
+            zimage-backend-unit-tests \
+            ctest --test-dir /src/build --output-on-failure -R IntegrationTests
+
+      - name: Build backend runtime image
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Backend
+          target: runtime
+          tags: zimage-backend-runtime
+          build-args: |
+            VCPKG_BINARY_SOURCES=clear;x-gha,readwrite
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Show MySQL logs on failure
+        if: failure()
+        run: docker logs zimage-mysql-ci
+
+      - name: Stop MySQL container
+        if: always()
+        run: docker rm -f zimage-mysql-ci || true
+
+  model-service-smoke:
+    name: Model Service Smoke Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ModelService
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile Python entrypoints
+        run: python -m compileall model_service.py main.py train_lora.py
+
+  docker-validation:
+    name: Docker Validation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    needs:
+      - frontend-build
+      - backend-docker
+      - model-service-smoke
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate docker compose configuration
+        run: docker compose config > /tmp/zimage-compose.yaml
+
+      - name: Build frontend runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ZImageFrontend
+          tags: zimage-frontend-runtime
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max

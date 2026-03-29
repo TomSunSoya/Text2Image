@@ -1,4 +1,4 @@
-#include "image_controller.h"
+#include "controllers/image_controller.h"
 
 #include <optional>
 
@@ -6,8 +6,8 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
-#include "image_service.h"
-#include "jwt_utils.h"
+#include "services/image_service.h"
+#include "utils/jwt_utils.h"
 
 namespace {
 

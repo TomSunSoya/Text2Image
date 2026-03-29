@@ -1,9 +1,11 @@
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
 import re
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -15,6 +17,7 @@ import uvicorn
 from diffusers import ZImagePipeline
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 
@@ -38,26 +41,47 @@ def read_list_env(name: str, fallback: list[str]) -> list[str]:
     return parsed or fallback
 
 
-LOCAL_MODEL_PATH = os.getenv(
-    "MODEL_PATH", "C:/Users/pc1/.cache/modelscope/hub/models/Tongyi-MAI/Z-Image-Turbo"
-)
+def select_model_dtype(device: str) -> torch.dtype:
+    if device == "cuda":
+        if hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported():
+            return torch.bfloat16
+        return torch.float16
+    return torch.float32
+
+
+LOCAL_MODEL_PATH = os.getenv("MODEL_PATH", "./models/Z-Image-Turbo")
 PORT = read_int_env("MODEL_SERVICE_PORT", 8081)
 LOG_DIR = os.getenv("MODEL_SERVICE_LOG_DIR", "./logs")
 TEMP_DIR = os.getenv("MODEL_SERVICE_TEMP_DIR", "./temp")
 ALLOW_ORIGINS = read_list_env("MODEL_SERVICE_ALLOW_ORIGINS", ["http://localhost:3000"])
 MAX_CONCURRENT_GENERATIONS = max(1, read_int_env("MODEL_SERVICE_MAX_CONCURRENT_GENERATIONS", 1))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+MODEL_DTYPE = select_model_dtype(DEVICE)
+MODEL_DTYPE_NAME = str(MODEL_DTYPE).replace("torch.", "")
+PROMPT_MIN_LENGTH = 3
+MAX_PROMPT_LENGTH = max(1, read_int_env("MODEL_SERVICE_MAX_PROMPT_LENGTH", 2000))
+MAX_NEGATIVE_PROMPT_LENGTH = max(1, read_int_env("MODEL_SERVICE_MAX_NEGATIVE_PROMPT_LENGTH", 2000))
+MIN_NUM_STEPS = 1
+MAX_NUM_STEPS = max(1, read_int_env("MODEL_SERVICE_MAX_NUM_STEPS", 50))
+MIN_IMAGE_SIDE = max(64, read_int_env("MODEL_SERVICE_MIN_IMAGE_SIDE", 256))
+MAX_IMAGE_SIDE = max(MIN_IMAGE_SIDE, read_int_env("MODEL_SERVICE_MAX_IMAGE_SIDE", 1024))
+IMAGE_SIDE_MULTIPLE = max(1, read_int_env("MODEL_SERVICE_IMAGE_SIDE_MULTIPLE", 8))
+MAX_IMAGE_PIXELS = max(MIN_IMAGE_SIDE * MIN_IMAGE_SIDE, read_int_env("MODEL_SERVICE_MAX_IMAGE_PIXELS", 1024 * 1024))
+TEMP_FILE_MAX_AGE_HOURS = max(1, read_int_env("MODEL_SERVICE_TEMP_FILE_MAX_AGE_HOURS", 24))
+TEMP_FILE_CLEANUP_INTERVAL_SECONDS = max(0, read_int_env("MODEL_SERVICE_TEMP_FILE_CLEANUP_INTERVAL_SECONDS", 3600))
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 TEMP_PATH = Path(TEMP_DIR).resolve()
+LOG_PATH = Path(LOG_DIR).resolve()
 
 os.makedirs(TEMP_PATH, exist_ok=True)
-os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(LOG_PATH, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, "model_service.log")),
+        logging.FileHandler(LOG_PATH / "model_service.log", encoding="utf-8"),
         logging.StreamHandler(),
     ],
 )
@@ -70,22 +94,96 @@ if "*" in ALLOW_ORIGINS:
         "Set MODEL_SERVICE_ALLOW_ORIGINS for production."
     )
 
-PROMPT_MIN_LENGTH = 3
-PROMPT_MAX_LENGTH = 1000
-NEGATIVE_PROMPT_MAX_LENGTH = 500
-MIN_IMAGE_SIZE = 512
-MAX_IMAGE_SIZE = 2048
-IMAGE_SIZE_STEP = 64
-MIN_NUM_STEPS = 1
-MAX_NUM_STEPS = 50
-REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-
 
 def resolve_temp_file(filename: str) -> Path:
     candidate = (TEMP_PATH / filename).resolve()
     if candidate.parent != TEMP_PATH or candidate.name != filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
     return candidate
+
+
+def prompt_fingerprint(prompt: str) -> str:
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
+
+
+def validate_generate_request(request: "GenerateRequest") -> "GenerateRequest":
+    prompt = request.prompt.strip()
+    negative_prompt = (request.negative_prompt or "").strip()
+    request_id = (request.request_id or "").strip() or None
+
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt must not be empty")
+    if len(prompt) < PROMPT_MIN_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"prompt length must be at least {PROMPT_MIN_LENGTH} characters",
+        )
+    if len(prompt) > MAX_PROMPT_LENGTH:
+        raise HTTPException(status_code=400, detail=f"prompt exceeds max length {MAX_PROMPT_LENGTH}")
+    if len(negative_prompt) > MAX_NEGATIVE_PROMPT_LENGTH:
+        raise HTTPException(status_code=400, detail=f"negative_prompt exceeds max length {MAX_NEGATIVE_PROMPT_LENGTH}")
+    if request.num_steps < MIN_NUM_STEPS or request.num_steps > MAX_NUM_STEPS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"num_steps must be between {MIN_NUM_STEPS} and {MAX_NUM_STEPS}",
+        )
+
+    for field_name, value in (("height", request.height), ("width", request.width)):
+        if value < MIN_IMAGE_SIDE or value > MAX_IMAGE_SIDE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be between {MIN_IMAGE_SIDE} and {MAX_IMAGE_SIDE}",
+            )
+        if value % IMAGE_SIDE_MULTIPLE != 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be a multiple of {IMAGE_SIDE_MULTIPLE}",
+            )
+
+    if request.width * request.height > MAX_IMAGE_PIXELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"image size exceeds max pixel budget {MAX_IMAGE_PIXELS}",
+        )
+
+    if request.seed is not None and request.seed < 0:
+        raise HTTPException(status_code=400, detail="seed must be greater than or equal to 0")
+
+    if request_id is not None and not REQUEST_ID_PATTERN.fullmatch(request_id):
+        raise HTTPException(
+            status_code=400,
+            detail="request_id must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+        )
+
+    return GenerateRequest(
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        num_steps=request.num_steps,
+        height=request.height,
+        width=request.width,
+        seed=request.seed,
+        request_id=request_id,
+    )
+
+
+def cleanup_temp_files_once(max_age_hours: int) -> None:
+    deleted_count = 0
+    cutoff_time = time.time() - max_age_hours * 3600
+
+    for filepath in TEMP_PATH.iterdir():
+        if not filepath.is_file():
+            continue
+        try:
+            if filepath.stat().st_mtime <= cutoff_time:
+                filepath.unlink()
+                deleted_count += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("Failed to clean temp file %s: %s", filepath, exc)
+
+    if deleted_count > 0:
+        logger.info("Deleted %s expired temp file(s)", deleted_count)
 
 
 class GenerateRequest(BaseModel):
@@ -105,57 +203,6 @@ class GenerateResponse(BaseModel):
     message: str
     timestamp: str
     generation_time: Optional[float] = None
-
-
-def validate_generate_request(request: GenerateRequest) -> GenerateRequest:
-    request.prompt = (request.prompt or "").strip()
-    request.negative_prompt = (request.negative_prompt or "").strip()
-
-    if len(request.prompt) < PROMPT_MIN_LENGTH or len(request.prompt) > PROMPT_MAX_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"prompt length must be between {PROMPT_MIN_LENGTH} and {PROMPT_MAX_LENGTH} characters",
-        )
-
-    if len(request.negative_prompt) > NEGATIVE_PROMPT_MAX_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"negative_prompt must be at most {NEGATIVE_PROMPT_MAX_LENGTH} characters",
-        )
-
-    if request.num_steps < MIN_NUM_STEPS or request.num_steps > MAX_NUM_STEPS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"num_steps must be between {MIN_NUM_STEPS} and {MAX_NUM_STEPS}",
-        )
-
-    for field_name in ("width", "height"):
-        value = getattr(request, field_name)
-        if value < MIN_IMAGE_SIZE or value > MAX_IMAGE_SIZE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{field_name} must be between {MIN_IMAGE_SIZE} and {MAX_IMAGE_SIZE}",
-            )
-        if value % IMAGE_SIZE_STEP != 0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{field_name} must be a multiple of {IMAGE_SIZE_STEP}",
-            )
-
-    if request.seed is not None and request.seed < 0:
-        raise HTTPException(status_code=400, detail="seed must be greater than or equal to 0")
-
-    if request.request_id is not None:
-        request.request_id = request.request_id.strip()
-        if not request.request_id:
-            request.request_id = None
-        elif not REQUEST_ID_PATTERN.fullmatch(request.request_id):
-            raise HTTPException(
-                status_code=400,
-                detail="request_id may only contain letters, numbers, dot, underscore, and hyphen",
-            )
-
-    return request
 
 
 class ZImageModelService:
@@ -239,9 +286,11 @@ class ZImageModelService:
 
             try:
                 self.pipe = ZImagePipeline.from_pretrained(
-                    LOCAL_MODEL_PATH, torch_dtype=torch.bfloat16, local_files_only=True
+                    LOCAL_MODEL_PATH,
+                    torch_dtype=MODEL_DTYPE,
+                    local_files_only=True
                 ).to(DEVICE)
-                logger.info("Model loaded. Device: %s", DEVICE)
+                logger.info("Model loaded. Device: %s, dtype: %s", DEVICE, MODEL_DTYPE_NAME)
                 return True
             except Exception as e:
                 self.pipe = None
@@ -270,7 +319,13 @@ class ZImageModelService:
                     generator = torch.Generator(device=DEVICE).manual_seed(request.seed)
 
                 logger.info(
-                    "Generating image for request_id=%s prompt=%s", request_id, request.prompt[:50]
+                    "Generating image request_id=%s prompt_chars=%s prompt_hash=%s steps=%s size=%sx%s",
+                    request_id,
+                    len(request.prompt),
+                    prompt_fingerprint(request.prompt),
+                    request.num_steps,
+                    request.width,
+                    request.height,
                 )
 
                 result = self.pipe(
@@ -317,7 +372,17 @@ class ZImageModelService:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    cleanup_task = asyncio.create_task(cleanup_temp_files())
+    cleanup_task = None
+    if TEMP_FILE_CLEANUP_INTERVAL_SECONDS > 0:
+        cleanup_task = asyncio.create_task(
+            cleanup_temp_files(
+                max_age_hours=TEMP_FILE_MAX_AGE_HOURS,
+                interval_seconds=TEMP_FILE_CLEANUP_INTERVAL_SECONDS,
+            )
+        )
+    else:
+        logger.info("Temp file cleanup disabled")
+
     if not model_service.initialize():
         logger.warning("Model preload failed: %s", model_service.last_error or "unknown error")
     logger.info("Model service started completely")
@@ -325,9 +390,10 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
-        cleanup_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await cleanup_task
+        if cleanup_task is not None:
+            cleanup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cleanup_task
 
 
 app = FastAPI(
@@ -356,6 +422,7 @@ async def root():
         "status": health["status"],
         "model_loaded": health["model_loaded"],
         "device": DEVICE,
+        "dtype": MODEL_DTYPE_NAME,
         "max_concurrent_generations": MAX_CONCURRENT_GENERATIONS,
     }
 
@@ -367,6 +434,7 @@ async def health_check():
         "status": health["status"],
         "timestamp": datetime.now().isoformat(),
         "device": DEVICE,
+        "dtype": MODEL_DTYPE_NAME,
         "model_loaded": health["model_loaded"],
         "is_loading": health["is_loading"],
         "is_generating": health["is_generating"],
@@ -402,27 +470,20 @@ async def get_temp_image(filename: str):
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Image not found")
 
-    from fastapi.responses import FileResponse
-
     return FileResponse(filepath, media_type="image/png")
 
 
-async def cleanup_temp_files(max_age_hours: int = 24):
-    import time
-
+async def cleanup_temp_files(
+    max_age_hours: int = TEMP_FILE_MAX_AGE_HOURS,
+    interval_seconds: int = TEMP_FILE_CLEANUP_INTERVAL_SECONDS,
+):
     while True:
         try:
-            current_time = time.time()
-            for filepath in TEMP_PATH.iterdir():
-                if filepath.is_file():
-                    file_age = current_time - filepath.stat().st_mtime
-                    if file_age > max_age_hours * 3600:
-                        filepath.unlink()
-                        logger.info("Deleted temp file: %s", filepath)
-        except Exception as e:
+            cleanup_temp_files_once(max_age_hours)
+        except Exception:
             logger.exception("Failed to delete temp files")
 
-        await asyncio.sleep(3600)
+        await asyncio.sleep(interval_seconds)
 
 
 if __name__ == "__main__":

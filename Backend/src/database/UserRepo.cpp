@@ -1,5 +1,5 @@
-#include "UserRepo.h"
-#include "db_manager.h"
+#include "database/UserRepo.h"
+#include "database/db_manager.h"
 #include <mysqlx/xdevapi.h>
 
 static models::User rowToUser(const mysqlx::Row& row) {

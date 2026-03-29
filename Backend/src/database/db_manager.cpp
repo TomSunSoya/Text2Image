@@ -1,4 +1,4 @@
-#include "db_manager.h"
+#include "database/db_manager.h"
 
 #include <chrono>
 #include <stdexcept>
@@ -76,6 +76,30 @@ const MysqlConfig& DBManager::config() {
     }
 
     return g_cfg;
+}
+
+bool DBManager::isHealthy()
+{
+	if (g_cfg.host.empty() || g_cfg.database.empty()) {
+		return false;
+	}
+
+	try {
+		auto& sess = threadSession();
+		sess.sql("SELECT 1").execute();
+		sess.getSchema(g_cfg.database, true);
+		return true;
+	} catch (const mysqlx::Error&) {
+		resetThreadSession();
+		try {
+			auto& sess = threadSession();
+			sess.sql("SELECT 1").execute();
+			sess.getSchema(g_cfg.database, true);
+			return true;
+		} catch (const mysqlx::Error&) {
+			return false;
+		}
+	}
 }
 
 mysqlx::Session& DBManager::session() {

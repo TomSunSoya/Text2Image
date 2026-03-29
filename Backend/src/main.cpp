@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <drogon/HttpAppFramework.h>
@@ -7,10 +9,10 @@
 #include <spdlog/spdlog.h>
 
 #include "Backend.h"
-#include "db_manager.h"
-#include "image_service.h"
-#include "minio_client.h"
-#include "redis_client.h"
+#include "database/db_manager.h"
+#include "services/image_service.h"
+#include "services/minio_client.h"
+#include "services/redis_client.h"
 
 int main() {
     try {
@@ -22,7 +24,8 @@ int main() {
         {
             const auto jwtSecret = config.at("jwt").value("secret", std::string());
             const std::vector<std::string> insecureSecrets = {
-                "", "CHANGE_ME", "change-me-via-JWT_SECRET", "development-secret-change-me"};
+                "", "CHANGE_ME", "CHANGE_ME_JWT_SECRET", "change-me-via-JWT_SECRET",
+                "development-secret-change-me"};
             for (const auto& insecure : insecureSecrets) {
                 if (jwtSecret == insecure) {
                     spdlog::critical("JWT secret is not configured! "
@@ -71,7 +74,23 @@ int main() {
             minioCfg.region = minioConfig.value("region", std::string("us-east-1"));
 
             MinioClient minio(minioCfg);
-            if (minio.ensureBucketExists()) {
+            constexpr int kMinioMaxAttempts = 10;
+            constexpr auto kMinioRetryDelay = std::chrono::seconds(2);
+            bool minioReady = false;
+            for (int attempt = 1; attempt <= kMinioMaxAttempts; ++attempt) {
+                if (minio.ensureBucketExists()) {
+                    minioReady = true;
+                    break;
+                }
+
+                if (attempt < kMinioMaxAttempts) {
+                    spdlog::warn("MinIO not ready yet ({}/{}), retrying in {}s",
+                                 attempt, kMinioMaxAttempts, kMinioRetryDelay.count());
+                    std::this_thread::sleep_for(kMinioRetryDelay);
+                }
+            }
+
+            if (minioReady) {
                 spdlog::info("MinIO ready: {}/{}", minioCfg.endpoint, minioCfg.bucket);
             } else {
                 spdlog::warn("MinIO bucket creation failed — image storage may not work");
@@ -85,7 +104,13 @@ int main() {
                std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
                 auto resp = drogon::HttpResponse::newHttpResponse();
                 resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
-                resp->setBody(R"({"status":"ok"})");
+                const bool dbHealthy = database::DBManager::isHealthy();
+                if (!dbHealthy) {
+                    resp->setStatusCode(drogon::k503ServiceUnavailable);
+                    resp->setBody(R"({"status":"unhealthy","database":"down"})");
+                } else {
+                    resp->setBody(R"({"status":"ok","database":"up"})");
+                }
                 callback(resp);
             };
 

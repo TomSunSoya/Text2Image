@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "jwt_utils.h"
+#include "utils/jwt_utils.h"
 
 TEST(JWT, CreateAndVerifyRoundTrip) {
     auto token = utils::createToken(42, "testuser");

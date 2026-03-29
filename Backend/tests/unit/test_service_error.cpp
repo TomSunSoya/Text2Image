@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "service_error.h"
+#include "services/service_error.h"
 
 TEST(ServiceError, ToJsonBasic) {
     ServiceError err{drogon::k400BadRequest, "bad_input", "input is invalid"};

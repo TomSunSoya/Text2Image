@@ -1,0 +1,22 @@
+name: Model Service Image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-service-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-model-service-image:
+    name: Build Model Service Runtime Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build model service runtime image
+        run: docker build -t zimage-model-service-runtime ./ModelService

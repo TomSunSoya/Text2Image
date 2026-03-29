@@ -20,9 +20,10 @@ set(TEST_LIBS
     nlohmann_json::nlohmann_json
     jwt-cpp::jwt-cpp
     unofficial::mysql-connector-cpp::connector
+    ${MYSQL_CONNECTOR_EXTRA_LIBS}
     miniocpp::miniocpp
-    redis++::redis++
-    hiredis::hiredis
+    ${REDIS_PP_TARGET}
+    ${HIREDIS_TARGET}
 )
 
 # ---------- Unit tests (no database needed) ----------

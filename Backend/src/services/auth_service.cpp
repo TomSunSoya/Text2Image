@@ -1,8 +1,8 @@
-#include "auth_service.h"
+#include "services/auth_service.h"
 
-#include "UserRepo.h"
-#include "jwt_utils.h"
-#include "password_utils.h"
+#include "database/UserRepo.h"
+#include "utils/jwt_utils.h"
+#include "utils/password_utils.h"
 
 std::expected<RegisterResult, ServiceError>
 AuthService::registerUser(const nlohmann::json& payload) const {

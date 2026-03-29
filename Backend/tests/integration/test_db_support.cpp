@@ -11,8 +11,8 @@
 #include <mysqlx/xdevapi.h>
 
 #include "Backend.h"
-#include "ImageRepo.h"
-#include "string_utils.h"
+#include "database/ImageRepo.h"
+#include "utils/string_utils.h"
 
 namespace test_support {
 

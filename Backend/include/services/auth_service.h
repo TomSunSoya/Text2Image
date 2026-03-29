@@ -6,8 +6,8 @@
 #include <drogon/HttpTypes.h>
 #include <nlohmann/json.hpp>
 
-#include "user.h"
-#include "service_error.h"
+#include "models/user.h"
+#include "services/service_error.h"
 
 struct RegisterResult {
     models::User user;

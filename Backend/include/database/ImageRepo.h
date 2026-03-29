@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "image_generation.h"
+#include "models/image_generation.h"
 
 struct ImagePageResult {
     std::vector<models::ImageGeneration> content;

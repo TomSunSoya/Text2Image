@@ -1,10 +1,10 @@
-#include "auth_controller.h"
+#include "controllers/auth_controller.h"
 
 #include <drogon/HttpResponse.h>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
-#include "auth_service.h"
+#include "services/auth_service.h"
 
 static void fillServiceError(const ServiceError& error, drogon::HttpResponsePtr& resp) {
     using nlohmann::json;

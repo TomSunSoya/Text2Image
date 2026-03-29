@@ -6,12 +6,214 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-CHANGE_ME_MINIO_PASSWORD}
     volumes:
       - minio-data:/data
     command: server /data --console-address ":9001"
     restart: unless-stopped
 
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    command:
+      - --mysqlx=ON
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-CHANGE_ME_ROOT}
+      MYSQL_DATABASE: ${DB_NAME:-image_generator}
+      MYSQL_USER: ${DB_USERNAME:-app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
+    ports:
+      - "${MYSQL_SQL_HOST_PORT:-3306}:3306"
+      - "${MYSQL_X_HOST_PORT:-33060}:33060"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./init-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "--no-auth-warning",
+          "-a",
+          "${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}",
+          "ping",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  model-service:
+    build:
+      context: ./ModelService
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      MODEL_SERVICE_PORT: ${MODEL_SERVICE_PORT:-8081}
+      MODEL_PATH: ${MODEL_PATH:-/app/models/Z-Image-Turbo}
+      MODEL_SERVICE_ALLOW_ORIGINS: ${MODEL_SERVICE_ALLOW_ORIGINS:-*}
+      MODEL_SERVICE_LOG_DIR: ${MODEL_SERVICE_LOG_DIR:-/app/logs}
+      MODEL_SERVICE_TEMP_DIR: ${MODEL_SERVICE_TEMP_DIR:-/app/temp}
+      MODEL_SERVICE_MAX_CONCURRENT_GENERATIONS: ${MODEL_SERVICE_MAX_CONCURRENT_GENERATIONS:-1}
+      MODEL_SERVICE_TEMP_FILE_MAX_AGE_HOURS: ${MODEL_SERVICE_TEMP_FILE_MAX_AGE_HOURS:-24}
+      MODEL_SERVICE_TEMP_FILE_CLEANUP_INTERVAL_SECONDS: ${MODEL_SERVICE_TEMP_FILE_CLEANUP_INTERVAL_SECONDS:-3600}
+    ports:
+      - "${MODEL_SERVICE_PORT:-8081}:${MODEL_SERVICE_PORT:-8081}"
+    volumes:
+      - ./ModelService/models:/app/models:ro
+      - model-service-logs:/app/logs
+      - model-service-temp:/app/temp
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${MODEL_SERVICE_PORT:-8081}/health').read()\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: ${BACKEND_PORT:-8080}
+      BACKEND_THREADS: ${BACKEND_THREADS:-4}
+      DB_HOST: mysql
+      DB_PORT: ${DB_PORT:-33060}
+      DB_USERNAME: ${DB_USERNAME:-app}
+      DB_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
+      DB_NAME: ${DB_NAME:-image_generator}
+      DB_SSL: ${DB_SSL:-false}
+      JWT_SECRET: ${JWT_SECRET:-CHANGE_ME}
+      JWT_EXPIRATION_HOURS: ${JWT_EXPIRATION_HOURS:-24}
+      PYTHON_SERVICE_URL: http://model-service:${MODEL_SERVICE_PORT:-8081}
+      PYTHON_SERVICE_TIMEOUT_SECONDS: ${PYTHON_SERVICE_TIMEOUT_SECONDS:-360}
+      TASK_ENGINE_WORKERS: ${TASK_ENGINE_WORKERS:-2}
+      TASK_ENGINE_POLL_INTERVAL_MS: ${TASK_ENGINE_POLL_INTERVAL_MS:-500}
+      TASK_ENGINE_LEASE_SECONDS: ${TASK_ENGINE_LEASE_SECONDS:-600}
+      TASK_ENGINE_MAX_RETRIES: ${TASK_ENGINE_MAX_RETRIES:-3}
+      TASK_ENGINE_WORKER_PREFIX: ${TASK_ENGINE_WORKER_PREFIX:-backend-worker}
+      STORAGE_ROOT_DIR: /app/storage/images
+      STORAGE_PUBLIC_URL_PREFIX: ${STORAGE_PUBLIC_URL_PREFIX:-/api/images}
+      STORAGE_EXTENSION: ${STORAGE_EXTENSION:-png}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-CHANGE_ME_MINIO_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-zimage}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
+      MINIO_PRESIGN_EXPIRY_SECONDS: ${MINIO_PRESIGN_EXPIRY_SECONDS:-3600}
+      REDIS_ENABLED: ${REDIS_ENABLED:-true}
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_POOL_SIZE: ${REDIS_POOL_SIZE:-4}
+      REDIS_CONNECT_TIMEOUT_MS: ${REDIS_CONNECT_TIMEOUT_MS:-1000}
+      REDIS_SOCKET_TIMEOUT_MS: ${REDIS_SOCKET_TIMEOUT_MS:-5000}
+      REDIS_TASK_QUEUE_KEY: ${REDIS_TASK_QUEUE_KEY:-zimage:task_queue}
+      REDIS_LEASE_KEY_PREFIX: ${REDIS_LEASE_KEY_PREFIX:-zimage:lease:}
+    ports:
+      - "${BACKEND_PORT:-8080}:${BACKEND_PORT:-8080}"
+    volumes:
+      - backend-storage:/app/storage
+    depends_on:
+      minio:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      model-service:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:${BACKEND_PORT:-8080}/health || exit 1",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./ZImageFrontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      BACKEND_UPSTREAM: backend:${BACKEND_PORT:-8080}
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1/nginx-health || exit 1",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  db-migrate:
+    image: mysql:8.4
+    profiles: ["ops"]
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${DB_NAME:-image_generator}
+      MYSQL_USER: ${DB_USERNAME:-app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
+      MIGRATIONS_DIR: /migrations
+    volumes:
+      - ./init-db/migrations:/migrations:ro
+      - ./scripts/run-db-migrations.sh:/scripts/run-db-migrations.sh:ro
+    entrypoint: ["sh", "/scripts/run-db-migrations.sh"]
+
 volumes:
   minio-data:
+  mysql-data:
+  redis-data:
+  backend-storage:
+  model-service-logs:
+  model-service-temp:

@@ -7,8 +7,8 @@
 
 #include <nlohmann/json.hpp>
 
-#include "image_generation.h"
-#include "service_error.h"
+#include "models/image_generation.h"
+#include "services/service_error.h"
 
 struct ImageCreateResult {
     models::ImageGeneration generation;
