@@ -115,6 +115,7 @@ services:
       DB_USERNAME: ${DB_USERNAME:-app}
       DB_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
       DB_NAME: ${DB_NAME:-image_generator}
+      DB_SSL: ${DB_SSL:-false}
       JWT_SECRET: ${JWT_SECRET:-CHANGE_ME}
       JWT_EXPIRATION_HOURS: ${JWT_EXPIRATION_HOURS:-24}
       PYTHON_SERVICE_URL: http://model-service:${MODEL_SERVICE_PORT:-8081}
