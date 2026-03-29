@@ -107,8 +107,18 @@ copy .env.example .env
 docker compose up --build
 ```
 
+For a brand-new MySQL volume, `init-db/01-schema.sql` creates the latest schema and records the current migration baseline automatically.
+
+For an existing database created before versioned migrations were added, run:
+
+```powershell
+docker compose up -d mysql
+docker compose --profile ops run --rm db-migrate
+```
+
 Generated assets and data:
 - MySQL data is stored in the `mysql-data` named volume
+- Redis data is stored in the `redis-data` named volume
 - backend image files are stored in the `backend-storage` named volume
 - model weights are expected under `ModelService/models/`
 
@@ -213,6 +223,7 @@ Important settings:
 - `jwt`: secret and token expiration
 - `python_service`: model-service URL and execution timeout
 - `task_engine`: worker count, polling, lease, retry policy
+- `redis`: queue coordination, lease keys, timeouts, and enable switch
 - `storage`: local image storage settings
 
 Environment-variable overrides are supported in the backend for common settings such as:
@@ -221,6 +232,9 @@ Environment-variable overrides are supported in the backend for common settings 
 - `DB_HOST` `DB_PORT` `DB_USERNAME` `DB_PASSWORD` `DB_NAME` `DB_SSL`
 - `JWT_SECRET`
 - `PYTHON_SERVICE_URL` `PYTHON_SERVICE_TIMEOUT_SECONDS`
+- `REDIS_ENABLED` `REDIS_HOST` `REDIS_PORT` `REDIS_PASSWORD` `REDIS_DB`
+- `REDIS_POOL_SIZE` `REDIS_CONNECT_TIMEOUT_MS` `REDIS_SOCKET_TIMEOUT_MS`
+- `REDIS_TASK_QUEUE_KEY` `REDIS_LEASE_KEY_PREFIX`
 - `STORAGE_ROOT_DIR` `STORAGE_PUBLIC_URL_PREFIX` `STORAGE_EXTENSION`
 
 The backend is now container-friendly in two ways:
@@ -248,15 +262,47 @@ Default container-oriented paths now assume:
 ### 7.3 Docker Preparation
 The repository now includes:
 - `.env.example` with service-to-service defaults for containers
+- `.env.production.example` as a production-only template with secret placeholders, replica counts, and resource limits
 - `.dockerignore` files at the repository root and per service
-- `docker-compose.yml` to orchestrate MySQL, MinIO, Backend, ModelService, and Frontend
+- `docker-compose.yml` to orchestrate MySQL, Redis, MinIO, Backend, ModelService, Frontend, and the optional `db-migrate` utility service
+- `docker-compose.prod.yml` for production-oriented resource limits, log rotation, and replica defaults
 - `init-db/01-schema.sql` for first-run MySQL schema initialization
+- `init-db/migrations/*.sql` plus `scripts/run-db-migrations.sh` for versioned schema upgrades on existing databases
 - Dockerfiles for `Backend/`, `ModelService/`, and `ZImageFrontend/`
-- `ZImageFrontend/nginx.conf` for SPA hosting plus backend/API/WebSocket reverse proxy
+- `ZImageFrontend/nginx.conf` for SPA hosting plus backend/API/WebSocket reverse proxy, gzip, and baseline security headers
 - `ModelService/requirements.txt` for Python image builds
 - frontend dev proxy targets configurable via `VITE_BACKEND_PROXY_TARGET` and `VITE_HEALTH_PROXY_TARGET`
 - GitHub Actions CI for frontend build, backend tests, and Docker validation
 - dedicated model-service image workflow for heavyweight runtime image builds
+
+### 7.4 Database Migrations
+
+Versioned database migrations now live under `init-db/migrations/`:
+
+- `001_initial_schema.sql`: legacy baseline schema
+- `002_image_generation_task_queue.sql`: task-engine lease, retry, and worker columns plus supporting indexes
+
+Operational notes:
+
+- fresh `docker compose up` runs `init-db/01-schema.sql` and records `001` + `002` in `schema_migrations`
+- the backend still keeps its existing startup-time defensive column/index checks for `image_generations`, but versioned migrations are now the primary upgrade path
+- existing databases should be upgraded with `docker compose --profile ops run --rm db-migrate`
+- when adding a new migration file, also fold that change into `init-db/01-schema.sql` and append the new version to its baseline `schema_migrations` insert for fresh installs
+
+### 7.5 Production Compose
+
+Recommended production flow:
+
+```powershell
+copy .env.production.example .env.production
+# replace every CHANGE_ME_* placeholder before deployment
+docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+Notes:
+
+- `docker-compose.prod.yml` sets CPU and memory limits plus container log rotation defaults
+- `deploy.replicas` values are provided for backend, frontend, and model-service; if your local Compose setup ignores them, use `docker compose up --scale <service>=<count>` with the same env file
 
 ## 8. Current State
 
@@ -272,7 +318,7 @@ What is already in place:
 What is not yet finished:
 
 - end-to-end automated tests across all three projects
-- production-grade secrets/config management
+- external secrets-manager integration beyond `.env.production`
 - structured observability and metrics
 - deployment packaging and one-command local bootstrap
 - stronger request validation and operational runbooks
@@ -281,4 +327,5 @@ What is not yet finished:
 
 - do not commit real secrets or production passwords
 - `Backend/config.json` is gitignored — use `Backend/config.json.example` as the template
-- move credentials and secrets to environment variables before any shared or deployed usage
+- replace every `CHANGE_ME_*` placeholder in `.env` or `.env.production` before any shared or deployed usage
+- keep internal-only services such as MySQL and Redis on trusted networks even when using the production compose override

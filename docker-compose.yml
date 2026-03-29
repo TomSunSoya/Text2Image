@@ -42,6 +42,34 @@ services:
       retries: 12
       start_period: 30s
 
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "--no-auth-warning",
+          "-a",
+          "${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}",
+          "ping",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
   model-service:
     build:
       context: ./ModelService
@@ -105,6 +133,16 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-zimage}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       MINIO_PRESIGN_EXPIRY_SECONDS: ${MINIO_PRESIGN_EXPIRY_SECONDS:-3600}
+      REDIS_ENABLED: ${REDIS_ENABLED:-true}
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_POOL_SIZE: ${REDIS_POOL_SIZE:-4}
+      REDIS_CONNECT_TIMEOUT_MS: ${REDIS_CONNECT_TIMEOUT_MS:-1000}
+      REDIS_SOCKET_TIMEOUT_MS: ${REDIS_SOCKET_TIMEOUT_MS:-5000}
+      REDIS_TASK_QUEUE_KEY: ${REDIS_TASK_QUEUE_KEY:-zimage:task_queue}
+      REDIS_LEASE_KEY_PREFIX: ${REDIS_LEASE_KEY_PREFIX:-zimage:lease:}
     ports:
       - "${BACKEND_PORT:-8080}:${BACKEND_PORT:-8080}"
     volumes:
@@ -113,6 +151,8 @@ services:
       minio:
         condition: service_started
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       model-service:
         condition: service_healthy
@@ -139,10 +179,40 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1/nginx-health || exit 1",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  db-migrate:
+    image: mysql:8.4
+    profiles: ["ops"]
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${DB_NAME:-image_generator}
+      MYSQL_USER: ${DB_USERNAME:-app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
+      MIGRATIONS_DIR: /migrations
+    volumes:
+      - ./init-db/migrations:/migrations:ro
+      - ./scripts/run-db-migrations.sh:/scripts/run-db-migrations.sh:ro
+    entrypoint: ["sh", "/scripts/run-db-migrations.sh"]
 
 volumes:
   minio-data:
   mysql-data:
+  redis-data:
   backend-storage:
   model-service-logs:
   model-service-temp:

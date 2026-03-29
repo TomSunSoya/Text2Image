@@ -14,9 +14,15 @@ COPY requirements.txt ./
 RUN python -m pip install --upgrade pip \
     && pip install -r requirements.txt
 
+RUN groupadd --system app \
+    && useradd --system --gid app --create-home --home-dir /home/app app
+
 COPY model_service.py main.py train_lora.py ./
 
-RUN mkdir -p /app/logs /app/temp /app/models /app/outputs
+RUN mkdir -p /app/logs /app/temp /app/models /app/outputs \
+    && chown -R app:app /app
+
+USER app
 
 EXPOSE 8081
 
