@@ -294,7 +294,7 @@ Versioned database migrations now live under `init-db/migrations/`:
 
 Operational notes:
 
-- fresh `docker compose up` runs `init-db/01-schema.sql` and records `001` + `002` in `schema_migrations`
+- fresh `docker compose up` runs `init-db/01-schema.sql` and records `001` + `002` + `003` in `schema_migrations`
 - the backend still keeps its existing startup-time defensive column/index checks for `image_generations`, but versioned migrations are now the primary upgrade path
 - existing databases should be upgraded with `docker compose --profile ops run --rm db-migrate`
 - when adding a new migration file, also fold that change into `init-db/01-schema.sql` and append the new version to its baseline `schema_migrations` insert for fresh installs

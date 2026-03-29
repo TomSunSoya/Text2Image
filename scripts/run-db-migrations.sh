@@ -10,7 +10,7 @@ password="${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}"
 migrations_dir="${MIGRATIONS_DIR:-/migrations}"
 
 mysql_exec() {
-  mysql --protocol=tcp -h"${host}" -P"${port}" -u"${user}" -p"${password}" "${database}" "$@"
+  MYSQL_PWD="${password}" mysql --protocol=tcp -h"${host}" -P"${port}" -u"${user}" "${database}" "$@"
 }
 
 run_migration_file() {
@@ -23,7 +23,7 @@ run_migration_file() {
 wait_for_mysql() {
   attempts=0
 
-  until mysql --protocol=tcp -h"${host}" -P"${port}" -u"${user}" -p"${password}" -e "SELECT 1" >/dev/null 2>&1; do
+  until MYSQL_PWD="${password}" mysql --protocol=tcp -h"${host}" -P"${port}" -u"${user}" -e "SELECT 1" >/dev/null 2>&1; do
     attempts=$((attempts + 1))
 
     if [ "${attempts}" -ge 30 ]; then
