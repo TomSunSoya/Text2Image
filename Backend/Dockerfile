@@ -4,6 +4,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 ENV VCPKG_ROOT=/opt/vcpkg
 ENV VCPKG_DEFAULT_TRIPLET=x64-linux
 ENV VCPKG_FORCE_SYSTEM_BINARIES=1
+ARG VCPKG_BINARY_SOURCES=""
+ENV VCPKG_BINARY_SOURCES=${VCPKG_BINARY_SOURCES}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
