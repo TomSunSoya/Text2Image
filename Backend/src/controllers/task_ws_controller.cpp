@@ -1,9 +1,9 @@
-#include "task_ws_controller.h"
+#include "controllers/task_ws_controller.h"
 
 #include <nlohmann/json.hpp>
 
-#include "jwt_utils.h"
-#include "task_event_hub.h"
+#include "utils/jwt_utils.h"
+#include "services/task_event_hub.h"
 
 void TaskWsController::handleNewMessage(const drogon::WebSocketConnectionPtr& connection,
                                         std::string&&, const drogon::WebSocketMessageType& type) {

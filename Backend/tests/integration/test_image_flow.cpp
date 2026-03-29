@@ -2,8 +2,8 @@
 
 #include <stdexcept>
 
-#include "auth_service.h"
-#include "image_service.h"
+#include "services/auth_service.h"
+#include "services/image_service.h"
 #include "test_db_support.h"
 
 namespace {

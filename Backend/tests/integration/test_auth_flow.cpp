@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
-#include "auth_service.h"
-#include "jwt_utils.h"
+#include "services/auth_service.h"
+#include "utils/jwt_utils.h"
 #include "test_db_support.h"
 
 class AuthFlowTest : public ::testing::Test {

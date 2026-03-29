@@ -9,10 +9,10 @@
 #include <spdlog/spdlog.h>
 
 #include "Backend.h"
-#include "db_manager.h"
-#include "image_service.h"
-#include "minio_client.h"
-#include "redis_client.h"
+#include "database/db_manager.h"
+#include "services/image_service.h"
+#include "services/minio_client.h"
+#include "services/redis_client.h"
 
 int main() {
     try {

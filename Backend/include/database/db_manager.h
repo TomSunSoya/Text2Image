@@ -8,8 +8,8 @@
 #include <mysqlx/xdevapi.h>
 #include <nlohmann/json.hpp>
 
-#include "user.h"
-#include "image_generation.h"
+#include "models/user.h"
+#include "models/image_generation.h"
 
 namespace database {
 

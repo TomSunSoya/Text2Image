@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "password_utils.h"
+#include "utils/password_utils.h"
 
 TEST(Password, HashAndVerifyRoundTrip) {
     const auto hashed = security::hashPassword("my-secret-123");

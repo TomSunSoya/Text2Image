@@ -8,7 +8,7 @@
 #include <string>
 
 #include "Backend.h"
-#include "redis_client.h"
+#include "services/redis_client.h"
 
 namespace {
 
