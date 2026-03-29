@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS image_generations (
 INSERT INTO schema_migrations (version)
 VALUES
   ('001_initial_schema'),
-  ('002_image_generation_task_queue')
+  ('002_image_generation_task_queue'),
+  ('003_add_image_base64')
 -- Keep this baseline list in sync with init-db/migrations/ so fresh installs
 -- record every migration that is already folded into this latest schema.
 ON DUPLICATE KEY UPDATE applied_at = applied_at;
