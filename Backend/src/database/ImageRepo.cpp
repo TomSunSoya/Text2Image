@@ -189,18 +189,6 @@ int normalizeSize(int size) {
     return size <= 0 ? 10 : size;
 }
 
-std::vector<models::ImageGeneration> collectResultRows(mysqlx::SqlResult& result) {
-    std::vector<models::ImageGeneration> images;
-    while (true) {
-        auto row = result.fetchOne();
-        if (!row) {
-            break;
-        }
-        images.push_back(rowToImageGeneration(row));
-    }
-    return images;
-}
-
 ImagePageResult collectPagedResultRows(mysqlx::SqlResult& result) {
     ImagePageResult page;
 

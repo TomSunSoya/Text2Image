@@ -173,9 +173,14 @@ def cleanup_temp_files_once(max_age_hours: int) -> None:
     for filepath in TEMP_PATH.iterdir():
         if not filepath.is_file():
             continue
-        if filepath.stat().st_mtime <= cutoff_time:
-            filepath.unlink()
-            deleted_count += 1
+        try:
+            if filepath.stat().st_mtime <= cutoff_time:
+                filepath.unlink()
+                deleted_count += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("Failed to clean temp file %s: %s", filepath, exc)
 
     if deleted_count > 0:
         logger.info("Deleted %s expired temp file(s)", deleted_count)
