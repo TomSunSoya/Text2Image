@@ -1,8 +1,8 @@
-#include "jwt_middleware.h"
+#include "middleware/jwt_middleware.h"
 
 #include <drogon/HttpResponse.h>
 
-#include "jwt_utils.h"
+#include "utils/jwt_utils.h"
 
 void JwtMiddleware::doFilter(const drogon::HttpRequestPtr& req, drogon::FilterCallback&& callback,
                              drogon::FilterChainCallback&& chainCallback) {

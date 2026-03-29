@@ -1,4 +1,4 @@
-#include "image_service.h"
+#include "services/image_service.h"
 
 #include <algorithm>
 #include <chrono>
@@ -15,12 +15,12 @@
 #include <tuple>
 
 #include "Backend.h"
-#include "ImageRepo.h"
-#include "client.h"
-#include "image_storage.h"
-#include "task_event_hub.h"
-#include "task_state_machine.h"
-#include "redis_client.h"
+#include "database/ImageRepo.h"
+#include "services/client.h"
+#include "models/image_storage.h"
+#include "services/task_event_hub.h"
+#include "utils/task_state_machine.h"
+#include "services/redis_client.h"
 
 namespace {
 

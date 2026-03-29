@@ -1,6 +1,6 @@
 #include "Backend.h"
 
-#include "string_utils.h"
+#include "utils/string_utils.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -12,6 +12,8 @@
 
 #ifdef _WIN32
 #include <Windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
 #else
 #include <unistd.h>
 #endif
@@ -28,6 +30,24 @@ std::filesystem::path executableDir() {
         return {};
     }
     return std::filesystem::path(buffer).parent_path();
+#elif defined(__APPLE__)
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    if (size == 0) {
+        return {};
+    }
+
+    std::vector<char> buffer(size, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+        return {};
+    }
+
+    std::error_code ec;
+    auto resolved = std::filesystem::weakly_canonical(std::filesystem::path(buffer.data()), ec);
+    if (ec) {
+        resolved = std::filesystem::path(buffer.data());
+    }
+    return resolved.parent_path();
 #else
     std::vector<char> buffer(4096, '\0');
     const auto len = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
@@ -247,4 +267,3 @@ const nlohmann::json& cachedConfig() {
 }
 
 } // namespace backend
-

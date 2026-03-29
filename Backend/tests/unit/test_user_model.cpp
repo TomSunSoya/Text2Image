@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "user.h"
+#include "models/user.h"
 
 // ==================== fromJson ====================
 

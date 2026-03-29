@@ -7,7 +7,7 @@
 
 #include <drogon/WebSocketConnection.h>
 
-#include "image_generation.h"
+#include "models/image_generation.h"
 
 class TaskEventHub {
   public:

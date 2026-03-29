@@ -31,6 +31,11 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(jwt-cpp CONFIG REQUIRED)
 # vcpkg: mysql-connector-cpp，经典 C++ API 用 mysql::concpp-jdbc，X DevAPI 用 mysql::concpp
 find_package(unofficial-mysql-connector-cpp CONFIG REQUIRED)
+if(APPLE)
+    find_package(Protobuf CONFIG REQUIRED)
+    find_package(lz4 CONFIG REQUIRED)
+    find_package(zstd CONFIG REQUIRED)
+endif()
 find_package(hiredis CONFIG REQUIRED)
 find_package(redis++ CONFIG REQUIRED)
 
@@ -54,6 +59,18 @@ endif()
 
 find_package(miniocpp REQUIRED)
 
+# mysql-connector-cpp's static package does not fully propagate all transitive
+# link dependencies on macOS, so we link them explicitly for local builds.
+if(APPLE)
+    set(MYSQL_CONNECTOR_EXTRA_LIBS
+        protobuf::libprotobuf
+        lz4::lz4
+        zstd::libzstd
+    )
+else()
+    set(MYSQL_CONNECTOR_EXTRA_LIBS "")
+endif()
+
 # 编译 ./src 下所有 .cpp（含子目录）；.h 通过 #include 参与，无需单独列出
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS include/*.h src/*.h)
@@ -74,6 +91,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     nlohmann_json::nlohmann_json
     jwt-cpp::jwt-cpp
     unofficial::mysql-connector-cpp::connector
+    ${MYSQL_CONNECTOR_EXTRA_LIBS}
     miniocpp::miniocpp
     ${REDIS_PP_TARGET}
     ${HIREDIS_TARGET}

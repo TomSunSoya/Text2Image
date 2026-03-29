@@ -1,4 +1,4 @@
-#include "ImageRepo.h"
+#include "database/ImageRepo.h"
 
 #include <chrono>
 #include <ctime>
@@ -13,7 +13,7 @@
 #include <mysqlx/xdevapi.h>
 #include <spdlog/spdlog.h>
 
-#include "db_manager.h"
+#include "database/db_manager.h"
 
 namespace {
 

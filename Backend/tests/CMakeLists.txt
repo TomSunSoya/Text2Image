@@ -20,6 +20,7 @@ set(TEST_LIBS
     nlohmann_json::nlohmann_json
     jwt-cpp::jwt-cpp
     unofficial::mysql-connector-cpp::connector
+    ${MYSQL_CONNECTOR_EXTRA_LIBS}
     miniocpp::miniocpp
     ${REDIS_PP_TARGET}
     ${HIREDIS_TARGET}
