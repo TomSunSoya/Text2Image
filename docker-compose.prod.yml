@@ -1,0 +1,52 @@
+x-prod-defaults: &prod-defaults
+  restart: unless-stopped
+  logging:
+    options:
+      max-size: ${LOG_MAX_SIZE:-10m}
+      max-file: ${LOG_MAX_FILE:-5}
+
+services:
+  minio:
+    <<: *prod-defaults
+    cpus: ${MINIO_CPUS:-1.0}
+    mem_limit: ${MINIO_MEM_LIMIT:-512m}
+
+  mysql:
+    <<: *prod-defaults
+    cpus: ${MYSQL_CPUS:-2.0}
+    mem_limit: ${MYSQL_MEM_LIMIT:-2g}
+
+  redis:
+    <<: *prod-defaults
+    cpus: ${REDIS_CPUS:-0.50}
+    mem_limit: ${REDIS_MEM_LIMIT:-256m}
+
+  model-service:
+    <<: *prod-defaults
+    cpus: ${MODEL_SERVICE_CPUS:-4.0}
+    mem_limit: ${MODEL_SERVICE_MEM_LIMIT:-12g}
+    deploy:
+      replicas: ${MODEL_SERVICE_REPLICAS:-1}
+    security_opt:
+      - no-new-privileges:true
+
+  backend:
+    <<: *prod-defaults
+    cpus: ${BACKEND_CPUS:-2.0}
+    mem_limit: ${BACKEND_MEM_LIMIT:-1g}
+    deploy:
+      replicas: ${BACKEND_REPLICAS:-2}
+    security_opt:
+      - no-new-privileges:true
+
+  frontend:
+    <<: *prod-defaults
+    cpus: ${FRONTEND_CPUS:-0.50}
+    mem_limit: ${FRONTEND_MEM_LIMIT:-256m}
+    deploy:
+      replicas: ${FRONTEND_REPLICAS:-2}
+    security_opt:
+      - no-new-privileges:true
+
+  db-migrate:
+    <<: *prod-defaults

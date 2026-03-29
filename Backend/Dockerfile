@@ -80,7 +80,12 @@ RUN ldconfig
 
 ENV BACKEND_CONFIG_PATH=/app/config.json
 
-RUN mkdir -p /app/storage/images
+RUN groupadd --system app \
+    && useradd --system --gid app --create-home --home-dir /home/app app \
+    && mkdir -p /app/storage/images \
+    && chown -R app:app /app
+
+USER app
 
 EXPOSE 8080
 
