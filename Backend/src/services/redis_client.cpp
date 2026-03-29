@@ -183,7 +183,7 @@ std::string redis::RedisClient::leaseKey(int64_t taskId) const {
     return config_.lease_key_prefix + std::to_string(taskId);
 }
 
-redis::RedisConfig redis::parseRedisConfig(const nlohmann::json& j) {
+RedisConfig parseRedisConfig(const nlohmann::json& j) {
     RedisConfig c;
     c.host = j.value("host", c.host);
     c.port = j.value("port", c.port);

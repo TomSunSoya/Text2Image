@@ -21,8 +21,8 @@ set(TEST_LIBS
     jwt-cpp::jwt-cpp
     unofficial::mysql-connector-cpp::connector
     miniocpp::miniocpp
-    redis++::redis++
-    hiredis::hiredis
+    ${REDIS_PP_TARGET}
+    ${HIREDIS_TARGET}
 )
 
 # ---------- Unit tests (no database needed) ----------

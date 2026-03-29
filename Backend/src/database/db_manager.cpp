@@ -85,21 +85,18 @@ bool DBManager::isHealthy()
 	}
 
 	try {
-		if (!g_sess) {
-			g_sess = createSession(g_cfg);
-		}
-
-		g_sess->sql("SELECT 1").execute();
-		g_sess->getSchema(g_cfg.database, true);
+		auto& sess = threadSession();
+		sess.sql("SELECT 1").execute();
+		sess.getSchema(g_cfg.database, true);
 		return true;
 	} catch (const mysqlx::Error&) {
+		resetThreadSession();
 		try {
-			g_sess = createSession(g_cfg);
-			g_sess->sql("SELECT 1").execute();
-			g_sess->getSchema(g_cfg.database, true);
+			auto& sess = threadSession();
+			sess.sql("SELECT 1").execute();
+			sess.getSchema(g_cfg.database, true);
 			return true;
 		} catch (const mysqlx::Error&) {
-			g_sess.reset();
 			return false;
 		}
 	}

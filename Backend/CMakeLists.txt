@@ -34,6 +34,23 @@ find_package(unofficial-mysql-connector-cpp CONFIG REQUIRED)
 find_package(hiredis CONFIG REQUIRED)
 find_package(redis++ CONFIG REQUIRED)
 
+# redis-plus-plus exports redis++::redis++ (shared) or redis++::redis++_static
+# depending on the vcpkg triplet; pick whichever is available.
+if(TARGET redis++::redis++)
+    set(REDIS_PP_TARGET redis++::redis++)
+elseif(TARGET redis++::redis++_static)
+    set(REDIS_PP_TARGET redis++::redis++_static)
+else()
+    message(FATAL_ERROR "redis-plus-plus found but no usable CMake target")
+endif()
+
+if(TARGET hiredis::hiredis)
+    set(HIREDIS_TARGET hiredis::hiredis)
+elseif(TARGET hiredis::hiredis_static)
+    set(HIREDIS_TARGET hiredis::hiredis_static)
+else()
+    message(FATAL_ERROR "hiredis found but no usable CMake target")
+endif()
 
 find_package(miniocpp REQUIRED)
 
@@ -58,8 +75,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     jwt-cpp::jwt-cpp
     unofficial::mysql-connector-cpp::connector
     miniocpp::miniocpp
-    redis++::redis++
-    hiredis::hiredis
+    ${REDIS_PP_TARGET}
+    ${HIREDIS_TARGET}
 )
 
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
