@@ -19,6 +19,18 @@ logs/
 *.local
 *.secret
 
+# AI coding metadata
+.claude/
+.qoder/
+**/AGENTS.md
+**/agents.md
+**/agent.md
+**/Agent.md
+**/CLAUDE.md
+**/claude.md
+**/CODEX.md
+**/codex.md
+
 # Python
 __pycache__/
 *.py[cod]

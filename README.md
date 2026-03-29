@@ -8,11 +8,6 @@ This repository currently includes the main delivery path:
 - `Backend/`: backend API and task orchestration, built with C++20 + Drogon + MySQL
 - `ModelService/`: model execution service, built with FastAPI + Diffusers
 
-Out of scope:
-
-- `PythonProject1/`
-- `ZImageBackend/`
-
 ## 2. Architecture
 
 The system is split into three layers:
@@ -23,8 +18,8 @@ The system is split into three layers:
 
 Default ports:
 
-- frontend: `3000`
-- backend: `8082`
+- frontend: `80` (nginx in Docker) / `3000` (Vite dev server)
+- backend: `8080`
 - model service: `8081`
 
 ## 3. Main Flow
@@ -32,11 +27,12 @@ Default ports:
 Image generation currently works like this:
 
 1. frontend sends `POST /api/images`
-2. backend creates a task in MySQL with status `queued`
-3. backend workers claim queued tasks and call `POST /generate` on `ModelService`
-4. `ModelService` generates the image and returns result metadata
-5. backend persists task status, timing, storage metadata, and history
-6. frontend polls `GET /api/images/{id}/status` and lazily loads the final image payload
+2. backend creates a task in MySQL with status `queued` and enqueues the task ID to Redis (if available)
+3. backend workers dequeue from Redis (or fall back to MySQL polling) and claim the task
+4. workers call `POST /generate` on `ModelService`
+5. `ModelService` generates the image, stores it in MinIO, and returns result metadata
+6. backend persists task status, timing, storage metadata, and history
+7. frontend receives real-time status updates via WebSocket (`/api/ws/tasks`) and lazily loads the final image
 
 ## 4. Current Capabilities
 
@@ -90,20 +86,34 @@ Canonical task statuses currently used across the stack:
 - `Backend/src/models/`: task and storage-related data models
 - `ModelService/model_service.py`: FastAPI model-service entrypoint
 - `ModelService/main.py`: local standalone model script
-- `plan.md`: long-term optimization plan for the full stack
+- `docker-compose.yml`: service orchestration (MySQL, Redis, MinIO, Backend, ModelService, Frontend)
+- `docker-compose.prod.yml`: production overlay with resource limits and log rotation
+- `init-db/`: initial schema and versioned migration scripts
+- `scripts/`: operational utilities (formatting, database migrations)
+- `.github/workflows/`: CI pipelines
 
 ## 6. Quick Start
 
 ### Prerequisites
 
-- `VCPKG_ROOT` environment variable must point to your vcpkg installation (e.g. `C:\Users\you\tools\vcpkg`)
+For Docker deployment (recommended):
+- Docker and Docker Compose v2
+- Model weights under `ModelService/models/Z-Image-Turbo`
 
-Start the services in this order.
+For local development without Docker:
+- `VCPKG_ROOT` environment variable pointing to your vcpkg installation
+- Node.js 20+, Python 3.11+, CMake 3.21+
+- Running MySQL, Redis, and MinIO instances
 
 ### 6.0 Docker Compose
-```powershell
-copy .env.example .env
+```bash
+cp .env.example .env
 # edit .env and replace every CHANGE_ME_* value before shared or deployed use
+vim .env
+
+# ensure model weights are in place
+ls ModelService/models/Z-Image-Turbo
+
 docker compose up --build
 ```
 
@@ -320,7 +330,6 @@ What is not yet finished:
 - end-to-end automated tests across all three projects
 - external secrets-manager integration beyond `.env.production`
 - structured observability and metrics
-- deployment packaging and one-command local bootstrap
 - stronger request validation and operational runbooks
 
 ## 9. Security Notes
