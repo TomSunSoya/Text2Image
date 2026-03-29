@@ -8,11 +8,6 @@ This repository currently includes the main delivery path:
 - `Backend/`: backend API and task orchestration, built with C++20 + Drogon + MySQL
 - `ModelService/`: model execution service, built with FastAPI + Diffusers
 
-Out of scope:
-
-- `PythonProject1/`
-- `ZImageBackend/`
-
 ## 2. Architecture
 
 The system is split into three layers:
