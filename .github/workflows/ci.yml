@@ -45,8 +45,23 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Expose GitHub Actions cache for Docker
+        uses: crazy-max/ghaction-github-runtime@v3
+
       - name: Build backend test image and run unit tests
-        run: docker build --target unit-tests -t zimage-backend-unit-tests ./Backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Backend
+          target: unit-tests
+          load: true
+          tags: zimage-backend-unit-tests
+          build-args: |
+            VCPKG_BINARY_SOURCES=clear;x-gha,readwrite
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
 
       - name: Start MySQL for integration tests
         run: |
@@ -89,7 +104,16 @@ jobs:
             ctest --test-dir /src/build --output-on-failure -R IntegrationTests
 
       - name: Build backend runtime image
-        run: docker build --target runtime -t zimage-backend-runtime ./Backend
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Backend
+          target: runtime
+          tags: zimage-backend-runtime
+          build-args: |
+            VCPKG_BINARY_SOURCES=clear;x-gha,readwrite
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
 
       - name: Show MySQL logs on failure
         if: failure()
@@ -120,6 +144,7 @@ jobs:
   docker-validation:
     name: Docker Validation
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     needs:
       - frontend-build
       - backend-docker
@@ -128,8 +153,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Validate docker compose configuration
         run: docker compose config > /tmp/zimage-compose.yaml
 
       - name: Build frontend runtime image
-        run: docker build -t zimage-frontend-runtime ./ZImageFrontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ZImageFrontend
+          tags: zimage-frontend-runtime
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
