@@ -72,7 +72,7 @@ nlohmann::json ImageGeneration::toJson() const {
                         {"numSteps", num_steps},
                         {"height", height},
                         {"width", width},
-                        {"status", status},
+                        {"status", std::string(statusToString(status))},
                         {"retryCount", retry_count},
                         {"maxRetries", max_retries},
                         {"failureCode", failure_code},
@@ -94,11 +94,6 @@ nlohmann::json ImageGeneration::toJson() const {
     putOptionalTime(j, "leaseExpiresAt", lease_expires_at);
 
     return j;
-}
-
-bool ImageGeneration::isTerminal() const {
-    return status == "success" || status == "failed" || status == "cancelled" ||
-           status == "timeout";
 }
 
 ImageGeneration ImageGeneration::fromJson(const nlohmann::json& j) {
@@ -123,7 +118,7 @@ ImageGeneration ImageGeneration::fromJson(const nlohmann::json& j) {
     if (const auto value = readIntAny(j, {"seed"}))
         img.seed = *value;
     if (const auto value = readStringAny(j, {"status"}))
-        img.status = *value;
+        img.status = statusFromString(*value);
     if (const auto value = readStringAny(j, {"image_url", "imageUrl"}))
         img.image_url = *value;
     if (const auto value = readStringAny(j, {"thumbnail_url", "thumbnailUrl"}))

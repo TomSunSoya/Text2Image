@@ -18,7 +18,7 @@ class ImageRepo {
     int64_t insert(const models::ImageGeneration& generation);
 
     ImagePageResult findByUserId(int64_t userId, int page, int size);
-    ImagePageResult findByUserIdAndStatus(int64_t userId, const std::string& status, int page,
+    ImagePageResult findByUserIdAndStatus(int64_t userId, models::TaskStatus status, int page,
                                           int size);
 
     std::optional<models::ImageGeneration> findByIdAndUserId(int64_t id, int64_t userId);
@@ -41,7 +41,7 @@ class ImageRepo {
 
     int expireLeases();
 
-    bool updateStatusAndError(int64_t id, int64_t userId, const std::string& status,
+    bool updateStatusAndError(int64_t id, int64_t userId, models::TaskStatus status,
                               const std::string& errorMessage = std::string{});
 
   private:

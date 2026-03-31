@@ -43,7 +43,7 @@ TEST_F(ImageFlowTest, CreateReturnsQueued) {
     ImageService service;
     auto result = service.create(userId_, {{"prompt", "a dog"}});
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->generation.status, "queued");
+    EXPECT_EQ(result->generation.status, models::TaskStatus::Queued);
     EXPECT_GT(result->generation.id, 0);
     EXPECT_FALSE(result->generation.request_id.empty());
 }
@@ -150,7 +150,7 @@ TEST_F(ImageFlowTest, GetByIdSuccess) {
     auto fetched = service.getById(userId_, created->generation.id, false);
     ASSERT_TRUE(fetched.has_value());
     EXPECT_EQ(fetched->generation.prompt, "hello");
-    EXPECT_EQ(fetched->generation.status, "queued");
+    EXPECT_EQ(fetched->generation.status, models::TaskStatus::Queued);
 }
 
 TEST_F(ImageFlowTest, GetByIdNotFound) {
@@ -180,7 +180,7 @@ TEST_F(ImageFlowTest, CancelQueuedTaskSucceeds) {
 
     auto cancelled = service.cancelById(userId_, created->generation.id);
     ASSERT_TRUE(cancelled.has_value());
-    EXPECT_EQ(cancelled->generation.status, "cancelled");
+    EXPECT_EQ(cancelled->generation.status, models::TaskStatus::Cancelled);
 }
 
 TEST_F(ImageFlowTest, CancelAlreadyCancelledFails) {
@@ -213,7 +213,7 @@ TEST_F(ImageFlowTest, RetryCancelledTaskSucceeds) {
 
     auto retried = service.retryById(userId_, taskId);
     ASSERT_TRUE(retried.has_value());
-    EXPECT_EQ(retried->generation.status, "queued");
+    EXPECT_EQ(retried->generation.status, models::TaskStatus::Queued);
 }
 
 TEST_F(ImageFlowTest, RetryQueuedTaskFails) {

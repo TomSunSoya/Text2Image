@@ -132,6 +132,10 @@ double getDoubleOrDefault(const mysqlx::Row& row, int index, double fallback) {
     return row[index].get<double>();
 }
 
+std::string statusToDbString(models::TaskStatus status) {
+    return std::string(models::statusToString(status));
+}
+
 models::ImageGeneration rowToImageGeneration(const mysqlx::Row& row) {
     models::ImageGeneration image;
     image.id = static_cast<int64_t>(row[0].get<uint64_t>());
@@ -145,7 +149,7 @@ models::ImageGeneration rowToImageGeneration(const mysqlx::Row& row) {
     if (!row[8].isNull()) {
         image.seed = static_cast<int>(row[8].get<int64_t>());
     }
-    image.status = getStringOrEmpty(row, 9);
+    image.status = models::statusFromString(getStringOrEmpty(row, 9));
     image.retry_count = getIntOrDefault(row, 10, 0);
     image.max_retries = getIntOrDefault(row, 11, 3);
     image.failure_code = getStringOrEmpty(row, 12);
@@ -217,10 +221,6 @@ int64_t extractCount(mysqlx::SqlResult& result) {
     return static_cast<int64_t>(row[0].get<uint64_t>());
 }
 
-bool isTerminalStatus(const std::string& status) {
-    return status == "success" || status == "failed" || status == "cancelled" ||
-           status == "timeout";
-}
 
 } // namespace
 
@@ -329,7 +329,8 @@ int64_t ImageRepo::insert(const models::ImageGeneration& generation) {
         )")
         .bind(generation.user_id, generation.request_id, generation.prompt,
               generation.negative_prompt, generation.num_steps, generation.height, generation.width,
-              seedValue, generation.status, generation.retry_count, generation.max_retries,
+              seedValue, statusToDbString(generation.status), generation.retry_count,
+              generation.max_retries,
               generation.failure_code, generation.worker_id, generation.image_url,
               generation.thumbnail_url, generation.storage_key, generation.error_message,
               generation.generation_time, timeToDbString(createdAt),
@@ -375,19 +376,20 @@ ImagePageResult ImageRepo::findByUserId(int64_t userId, int page, int size) {
     return pageResult;
 }
 
-ImagePageResult ImageRepo::findByUserIdAndStatus(int64_t userId, const std::string& status,
+ImagePageResult ImageRepo::findByUserIdAndStatus(int64_t userId, models::TaskStatus status,
                                                  int page, int size) {
     ensureTable();
 
     const int safePage = normalizePage(page);
     const int safeSize = normalizeSize(size);
     const int64_t offset = static_cast<int64_t>(safePage) * static_cast<int64_t>(safeSize);
+    const auto statusText = statusToDbString(status);
 
     auto result = database::DBManager::threadSession()
                       .sql(std::string("SELECT ") + kColumns + ", COUNT(*) OVER() AS total_count" +
                            " FROM " + imageTableName() +
                            " WHERE user_id = ? AND status = ? ORDER BY id DESC LIMIT ? OFFSET ?")
-                      .bind(userId, status, safeSize, offset)
+                      .bind(userId, statusText, safeSize, offset)
                       .execute();
 
     auto pageResult = collectPagedResultRows(result);
@@ -395,7 +397,7 @@ ImagePageResult ImageRepo::findByUserIdAndStatus(int64_t userId, const std::stri
         auto countResult = database::DBManager::threadSession()
                                .sql("SELECT COUNT(*) FROM " + imageTableName() +
                                     " WHERE user_id = ? AND status = ?")
-                               .bind(userId, status)
+                               .bind(userId, statusText)
                                .execute();
         pageResult.total_elements = extractCount(countResult);
     }
@@ -603,7 +605,7 @@ bool ImageRepo::finishClaimedTask(const models::ImageGeneration& generation) {
                  " failure_code = ?, thumbnail_url = ?, storage_key = ?, lease_expires_at = NULL, "
                  "worker_id = NULL "
                  " WHERE id = ? AND user_id = ? AND status = 'generating' AND worker_id = ?")
-            .bind(generation.status, generation.image_url, generation.error_message,
+            .bind(statusToDbString(generation.status), generation.image_url, generation.error_message,
                   generation.generation_time, optionalTimeToValue(generation.completed_at),
                   optionalTimeToValue(generation.cancelled_at), generation.failure_code,
                   generation.thumbnail_url, generation.storage_key, generation.id,
@@ -716,12 +718,12 @@ int ImageRepo::expireLeases() {
                             timeoutResult.getAffectedItemsCount());
 }
 
-bool ImageRepo::updateStatusAndError(int64_t id, int64_t userId, const std::string& status,
+bool ImageRepo::updateStatusAndError(int64_t id, int64_t userId, models::TaskStatus status,
                                      const std::string& errorMessage) {
     ensureTable();
 
     mysqlx::Value completedAt =
-        isTerminalStatus(status) ? mysqlx::Value(timeToDbString(std::chrono::system_clock::now()))
+        models::isTerminal(status) ? mysqlx::Value(timeToDbString(std::chrono::system_clock::now()))
                                  : mysqlx::Value();
 
     auto result =
@@ -729,7 +731,7 @@ bool ImageRepo::updateStatusAndError(int64_t id, int64_t userId, const std::stri
             .sql(
                 "UPDATE " + imageTableName() +
                 " SET status = ?, error_message = ?, completed_at = ? WHERE id = ? AND user_id = ?")
-            .bind(status, errorMessage, completedAt, id, userId)
+            .bind(statusToDbString(status), errorMessage, completedAt, id, userId)
             .execute();
 
     return result.getAffectedItemsCount() > 0;

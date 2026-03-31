@@ -16,11 +16,10 @@
 
 #include "Backend.h"
 #include "database/ImageRepo.h"
-#include "services/client.h"
 #include "models/image_storage.h"
-#include "services/task_event_hub.h"
-#include "utils/task_state_machine.h"
+#include "services/client.h"
 #include "services/redis_client.h"
+#include "services/task_event_hub.h"
 
 namespace {
 
@@ -239,24 +238,35 @@ std::string toLower(std::string value) {
     return value;
 }
 
-std::string normalizeStatus(const std::string& rawStatus) {
-    const auto status = toLower(rawStatus);
+models::TaskStatus normalizeTaskStatus(std::string_view rawStatus) {
+    const auto status = toLower(std::string(rawStatus));
 
     if (status == "success" || status == "succeeded" || status == "completed" || status == "done" ||
         status == "ok") {
-        return "success";
+        return models::TaskStatus::Success;
     }
 
     if (status == "failed" || status == "failure" || status == "error") {
-        return "failed";
+        return models::TaskStatus::Failed;
     }
 
-    if (status == "queued" || status == "pending" || status == "processing" ||
-        status == "generating") {
-        return "queued";
+    if (status == "queued") {
+        return models::TaskStatus::Queued;
     }
 
-    return status;
+    if (status == "pending") {
+        return models::TaskStatus::Pending;
+    }
+
+    if (status == "processing" || status == "generating") {
+        return models::TaskStatus::Generating;
+    }
+
+    return models::statusFromString(status);
+}
+
+std::string statusToDetailString(models::TaskStatus status) {
+    return std::string(models::statusToString(status));
 }
 
 std::optional<std::string> getStringField(const nlohmann::json& json, const char* key) {
@@ -277,9 +287,16 @@ void mergeRemoteResult(const nlohmann::json& remoteJson, models::ImageGeneration
     if (!remoteGeneration.request_id.empty()) {
         generation.request_id = remoteGeneration.request_id;
     }
-    if (!remoteGeneration.status.empty()) {
+
+    if (const auto rawStatus = getStringField(*payload, "status")) {
+        if (const auto normalizedStatus = normalizeTaskStatus(*rawStatus);
+            normalizedStatus != models::TaskStatus::Unknown) {
+            generation.status = normalizedStatus;
+        }
+    } else if (remoteGeneration.status != models::TaskStatus::Unknown) {
         generation.status = remoteGeneration.status;
     }
+
     if (!remoteGeneration.image_url.empty()) {
         generation.image_url = remoteGeneration.image_url;
     }
@@ -330,7 +347,7 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation) 
         const auto generateUrl = serviceUrl + "/generate";
         auto response = client.postJson(generateUrl, modelPayload.dump());
         if (!response.ok()) {
-            generation.status = "failed";
+            generation.status = models::TaskStatus::Failed;
             generation.failure_code = "python_service_request_failed";
             if (!response.error.empty()) {
                 generation.error_message =
@@ -342,7 +359,7 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation) 
             spdlog::warn("ImageService async call {} failed (status: {}, error: {})", generateUrl,
                          response.status_code, response.error);
         } else if (response.body.empty()) {
-            generation.status = "failed";
+            generation.status = models::TaskStatus::Failed;
             generation.failure_code = "python_service_empty_response";
             generation.error_message = "python service returned empty response";
             spdlog::warn("ImageService async call {} returned empty response body", generateUrl);
@@ -351,19 +368,19 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation) 
             if (!remoteJson.is_discarded()) {
                 mergeRemoteResult(remoteJson, generation);
             } else {
-                generation.status = "failed";
+                generation.status = models::TaskStatus::Failed;
                 generation.failure_code = "python_service_invalid_json";
                 generation.error_message = "python service returned invalid json";
                 spdlog::warn("ImageService async call {} returned invalid json", generateUrl);
             }
         }
     } catch (const std::exception& ex) {
-        generation.status = "failed";
+        generation.status = models::TaskStatus::Failed;
         generation.failure_code = "python_service_exception";
         generation.error_message = std::format("python service exception: {}", ex.what());
         spdlog::error("ImageService async exception: {}", ex.what());
     } catch (...) {
-        generation.status = "failed";
+        generation.status = models::TaskStatus::Failed;
         generation.failure_code = "python_service_unknown_exception";
         generation.error_message = "python service unknown exception";
         spdlog::error("ImageService async unknown exception");
@@ -378,22 +395,24 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation) 
         generation.image_bytes = downloadImageBytes(generation.image_url, timeoutSeconds);
     }
 
-    generation.status = normalizeStatus(generation.status);
-    if (!generation.image_bytes.empty() && generation.status != "failed") {
-        generation.status = "success";
+    if (!generation.image_bytes.empty() && generation.status != models::TaskStatus::Failed) {
+        generation.status = models::TaskStatus::Success;
         generation.failure_code.clear();
         generation.error_message.clear();
     }
 
-    if (generation.status.empty() || generation.status == "queued") {
-        generation.status = "failed";
+    if (generation.status == models::TaskStatus::Unknown ||
+        generation.status == models::TaskStatus::Pending ||
+        generation.status == models::TaskStatus::Queued ||
+        generation.status == models::TaskStatus::Generating) {
+        generation.status = models::TaskStatus::Failed;
         generation.failure_code = "missing_image_payload";
         if (generation.error_message.empty()) {
             generation.error_message = "model result did not include image data";
         }
     }
 
-    if (generation.status == "success" || generation.status == "failed") {
+    if (models::isTerminal(generation.status)) {
         generation.completed_at = std::chrono::system_clock::now();
     }
 
@@ -401,12 +420,12 @@ models::ImageGeneration runRemoteGeneration(models::ImageGeneration generation) 
 }
 
 void persistGeneratedImage(models::ImageGeneration& generation) {
-    if (generation.status != "success") {
+    if (generation.status != models::TaskStatus::Success) {
         return;
     }
 
     if (generation.image_bytes.empty()) {
-        generation.status = "failed";
+        generation.status = models::TaskStatus::Failed;
         generation.failure_code = "missing_image_payload";
         generation.error_message = "generation succeeded but image binary is missing";
         generation.completed_at = Clock::now();
@@ -421,7 +440,7 @@ void persistGeneratedImage(models::ImageGeneration& generation) {
         generation.image_url = std::format("/api/images/{}/binary", generation.id);
         generation.image_bytes.clear();
     } catch (const std::exception& ex) {
-        generation.status = "failed";
+        generation.status = models::TaskStatus::Failed;
         generation.failure_code = "storage_write_failed";
         generation.error_message =
             std::format("generation succeeded but failed to store image: {}", ex.what());
@@ -657,7 +676,7 @@ ImageService::create(int64_t userId, const nlohmann::json& payload) const {
     generation.created_at = std::chrono::system_clock::now();
     generation.request_id =
         generation.request_id.empty() ? buildRequestId() : generation.request_id;
-    generation.status = "queued";
+    generation.status = models::TaskStatus::Queued;
     generation.error_message.clear();
     generation.completed_at = std::nullopt;
     generation.image_url.clear();
@@ -715,7 +734,7 @@ ImageService::listMyByStatus(int64_t userId, const std::string& status, int page
             ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
-    const auto target = normalizeStatus(status);
+    const auto target = normalizeTaskStatus(status);
 
     try {
         ImageRepo repo;
@@ -779,10 +798,10 @@ std::expected<ImageGetResult, ServiceError> ImageService::cancelById(int64_t use
                 ServiceError{drogon::k404NotFound, "task_not_found", "task not found"});
         }
 
-        if (!task_state::canCancel(current->status)) {
+        if (!models::canCancel(current->status)) {
             ServiceError err{drogon::k400BadRequest, "task_cancel_not_allowed",
                              "task is already completed and cannot be cancelled"};
-            err.details["status"] = current->status;
+            err.details["status"] = statusToDetailString(current->status);
             return std::unexpected(std::move(err));
         }
 
@@ -832,10 +851,10 @@ std::expected<ImageGetResult, ServiceError> ImageService::retryById(int64_t user
                 ServiceError{drogon::k404NotFound, "task_not_found", "task not found"});
         }
 
-        if (!task_state::canRetry(current->status, current->retry_count, current->max_retries)) {
+        if (!models::canRetry(current->status, current->retry_count, current->max_retries)) {
             ServiceError err{drogon::k409Conflict, "task_retry_not_allowed",
                              "only failed, timeout or canceled tasks can be retried"};
-            err.details["status"] = current->status;
+            err.details["status"] = statusToDetailString(current->status);
             err.details["retryCount"] = current->retry_count;
             err.details["maxRetries"] = current->max_retries;
             return std::unexpected(std::move(err));
@@ -873,10 +892,10 @@ std::expected<ImageBinaryResult, ServiceError> ImageService::getBinaryById(int64
                 ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
         }
 
-        if (!task_state::canReturnBinary(image->status, image->storage_key)) {
+        if (!models::canReturnBinary(image->status, image->storage_key)) {
             ServiceError err{drogon::k409Conflict, "image_binary_not_ready",
                              "image binary is not ready"};
-            err.details["status"] = image->status;
+            err.details["status"] = statusToDetailString(image->status);
             return std::unexpected(std::move(err));
         }
 
@@ -914,10 +933,10 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
                 ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
         }
 
-        if (!task_state::canDelete(current->status)) {
+        if (!models::canDelete(current->status)) {
             ServiceError err{drogon::k400BadRequest, "task_delete_not_allowed",
                              "only completed tasks can be deleted"};
-            err.details["status"] = current->status;
+            err.details["status"] = statusToDetailString(current->status);
             return std::unexpected(std::move(err));
         }
 

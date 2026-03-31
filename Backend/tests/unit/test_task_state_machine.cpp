@@ -1,102 +1,99 @@
 #include <gtest/gtest.h>
-#include "utils/task_state_machine.h"
+#include "models/task_status.h"
 
 // ==================== isTerminal ====================
 
 TEST(TaskState_IsTerminal, TerminalStates) {
-    EXPECT_TRUE(task_state::isTerminal("success"));
-    EXPECT_TRUE(task_state::isTerminal("failed"));
-    EXPECT_TRUE(task_state::isTerminal("cancelled"));
-    EXPECT_TRUE(task_state::isTerminal("timeout"));
+    EXPECT_TRUE(models::isTerminal(models::TaskStatus::Success));
+    EXPECT_TRUE(models::isTerminal(models::TaskStatus::Failed));
+    EXPECT_TRUE(models::isTerminal(models::TaskStatus::Cancelled));
+    EXPECT_TRUE(models::isTerminal(models::TaskStatus::Timeout));
 }
 
 TEST(TaskState_IsTerminal, NonTerminalStates) {
-    EXPECT_FALSE(task_state::isTerminal("queued"));
-    EXPECT_FALSE(task_state::isTerminal("pending"));
-    EXPECT_FALSE(task_state::isTerminal("generating"));
+    EXPECT_FALSE(models::isTerminal(models::TaskStatus::Queued));
+    EXPECT_FALSE(models::isTerminal(models::TaskStatus::Pending));
+    EXPECT_FALSE(models::isTerminal(models::TaskStatus::Generating));
 }
 
 TEST(TaskState_IsTerminal, EmptyAndUnknown) {
-    EXPECT_FALSE(task_state::isTerminal(""));
-    EXPECT_FALSE(task_state::isTerminal("unknown"));
-    EXPECT_FALSE(task_state::isTerminal("SUCCESS")); // case-sensitive
+    EXPECT_FALSE(models::isTerminal(models::TaskStatus::Unknown));
 }
 
 // ==================== canCancel ====================
 
 TEST(TaskState_CanCancel, CancellableStates) {
-    EXPECT_TRUE(task_state::canCancel("queued"));
-    EXPECT_TRUE(task_state::canCancel("pending"));
-    EXPECT_TRUE(task_state::canCancel("generating"));
+    EXPECT_TRUE(models::canCancel(models::TaskStatus::Queued));
+    EXPECT_TRUE(models::canCancel(models::TaskStatus::Pending));
+    EXPECT_TRUE(models::canCancel(models::TaskStatus::Generating));
 }
 
 TEST(TaskState_CanCancel, NonCancellableStates) {
-    EXPECT_FALSE(task_state::canCancel("success"));
-    EXPECT_FALSE(task_state::canCancel("failed"));
-    EXPECT_FALSE(task_state::canCancel("cancelled"));
-    EXPECT_FALSE(task_state::canCancel("timeout"));
-}
-
-TEST(TaskState_CanCancel, EmptyAndUnknown) {
-    EXPECT_FALSE(task_state::canCancel(""));
-    EXPECT_FALSE(task_state::canCancel("garbage"));
+    EXPECT_FALSE(models::canCancel(models::TaskStatus::Success));
+    EXPECT_FALSE(models::canCancel(models::TaskStatus::Failed));
+    EXPECT_FALSE(models::canCancel(models::TaskStatus::Cancelled));
+    EXPECT_FALSE(models::canCancel(models::TaskStatus::Timeout));
+    EXPECT_FALSE(models::canCancel(models::TaskStatus::Unknown));
 }
 
 // ==================== canRetry ====================
 
 TEST(TaskState_CanRetry, RetryableWithQuota) {
-    EXPECT_TRUE(task_state::canRetry("failed", 0, 3));
-    EXPECT_TRUE(task_state::canRetry("failed", 2, 3));
-    EXPECT_TRUE(task_state::canRetry("timeout", 0, 1));
-    EXPECT_TRUE(task_state::canRetry("cancelled", 1, 3));
+    EXPECT_TRUE(models::canRetry(models::TaskStatus::Failed, 0, 3));
+    EXPECT_TRUE(models::canRetry(models::TaskStatus::Failed, 2, 3));
+    EXPECT_TRUE(models::canRetry(models::TaskStatus::Timeout, 0, 1));
+    EXPECT_TRUE(models::canRetry(models::TaskStatus::Cancelled, 1, 3));
 }
 
 TEST(TaskState_CanRetry, QuotaExhausted) {
-    EXPECT_FALSE(task_state::canRetry("failed", 3, 3));
-    EXPECT_FALSE(task_state::canRetry("failed", 5, 3));
-    EXPECT_FALSE(task_state::canRetry("timeout", 1, 1));
+    EXPECT_FALSE(models::canRetry(models::TaskStatus::Failed, 3, 3));
+    EXPECT_FALSE(models::canRetry(models::TaskStatus::Failed, 5, 3));
+    EXPECT_FALSE(models::canRetry(models::TaskStatus::Timeout, 1, 1));
 }
 
 TEST(TaskState_CanRetry, NonRetryableStates) {
-    EXPECT_FALSE(task_state::canRetry("success", 0, 3));
-    EXPECT_FALSE(task_state::canRetry("queued", 0, 3));
-    EXPECT_FALSE(task_state::canRetry("pending", 0, 3));
-    EXPECT_FALSE(task_state::canRetry("generating", 0, 3));
+    EXPECT_FALSE(models::canRetry(models::TaskStatus::Success, 0, 3));
+    EXPECT_FALSE(models::canRetry(models::TaskStatus::Queued, 0, 3));
+    EXPECT_FALSE(models::canRetry(models::TaskStatus::Pending, 0, 3));
+    EXPECT_FALSE(models::canRetry(models::TaskStatus::Generating, 0, 3));
+    EXPECT_FALSE(models::canRetry(models::TaskStatus::Unknown, 0, 3));
 }
 
 TEST(TaskState_CanRetry, ZeroMaxRetries) {
-    EXPECT_FALSE(task_state::canRetry("failed", 0, 0));
+    EXPECT_FALSE(models::canRetry(models::TaskStatus::Failed, 0, 0));
 }
 
 // ==================== canDelete ====================
 
 TEST(TaskState_CanDelete, DeletableStates) {
-    EXPECT_TRUE(task_state::canDelete("success"));
-    EXPECT_TRUE(task_state::canDelete("failed"));
-    EXPECT_TRUE(task_state::canDelete("cancelled"));
-    EXPECT_TRUE(task_state::canDelete("timeout"));
+    EXPECT_TRUE(models::canDelete(models::TaskStatus::Success));
+    EXPECT_TRUE(models::canDelete(models::TaskStatus::Failed));
+    EXPECT_TRUE(models::canDelete(models::TaskStatus::Cancelled));
+    EXPECT_TRUE(models::canDelete(models::TaskStatus::Timeout));
 }
 
 TEST(TaskState_CanDelete, NonDeletableStates) {
-    EXPECT_FALSE(task_state::canDelete("queued"));
-    EXPECT_FALSE(task_state::canDelete("pending"));
-    EXPECT_FALSE(task_state::canDelete("generating"));
+    EXPECT_FALSE(models::canDelete(models::TaskStatus::Queued));
+    EXPECT_FALSE(models::canDelete(models::TaskStatus::Pending));
+    EXPECT_FALSE(models::canDelete(models::TaskStatus::Generating));
+    EXPECT_FALSE(models::canDelete(models::TaskStatus::Unknown));
 }
 
 // ==================== canReturnBinary ====================
 
 TEST(TaskState_CanReturnBinary, SuccessWithKey) {
-    EXPECT_TRUE(task_state::canReturnBinary("success", "task-1.png"));
-    EXPECT_TRUE(task_state::canReturnBinary("success", "any-key"));
+    EXPECT_TRUE(models::canReturnBinary(models::TaskStatus::Success, "task-1.png"));
+    EXPECT_TRUE(models::canReturnBinary(models::TaskStatus::Success, "any-key"));
 }
 
 TEST(TaskState_CanReturnBinary, SuccessWithoutKey) {
-    EXPECT_FALSE(task_state::canReturnBinary("success", ""));
+    EXPECT_FALSE(models::canReturnBinary(models::TaskStatus::Success, ""));
 }
 
 TEST(TaskState_CanReturnBinary, NonSuccessWithKey) {
-    EXPECT_FALSE(task_state::canReturnBinary("failed", "task-1.png"));
-    EXPECT_FALSE(task_state::canReturnBinary("queued", "task-1.png"));
-    EXPECT_FALSE(task_state::canReturnBinary("generating", "task-1.png"));
-    EXPECT_FALSE(task_state::canReturnBinary("cancelled", "task-1.png"));
+    EXPECT_FALSE(models::canReturnBinary(models::TaskStatus::Failed, "task-1.png"));
+    EXPECT_FALSE(models::canReturnBinary(models::TaskStatus::Queued, "task-1.png"));
+    EXPECT_FALSE(models::canReturnBinary(models::TaskStatus::Generating, "task-1.png"));
+    EXPECT_FALSE(models::canReturnBinary(models::TaskStatus::Cancelled, "task-1.png"));
+    EXPECT_FALSE(models::canReturnBinary(models::TaskStatus::Unknown, "task-1.png"));
 }
