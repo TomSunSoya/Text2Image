@@ -18,11 +18,12 @@ enum class TaskStatus : uint8_t {
 };
 
 constexpr bool isTerminal(TaskStatus s) noexcept {
+    using enum TaskStatus;
     switch (s) {
-        case TaskStatus::Success:
-        case TaskStatus::Failed:
-        case TaskStatus::Cancelled:
-        case TaskStatus::Timeout:
+        case Success:
+        case Failed:
+        case Cancelled:
+        case Timeout:
             return true;
         default:
             return false;
@@ -30,10 +31,11 @@ constexpr bool isTerminal(TaskStatus s) noexcept {
 }
 
 constexpr bool canCancel(TaskStatus s) noexcept {
+    using enum TaskStatus;
     switch (s) {
-        case TaskStatus::Pending:
-        case TaskStatus::Queued:
-        case TaskStatus::Generating:
+        case Pending:
+        case Queued:
+        case Generating:
             return true;
         default:
             return false;
@@ -43,10 +45,11 @@ constexpr bool canCancel(TaskStatus s) noexcept {
 constexpr bool canRetry(TaskStatus s, int retryCount, int maxRetries) noexcept {
     if (retryCount >= maxRetries)
         return false;
+    using enum TaskStatus;
     switch (s) {
-        case TaskStatus::Failed:
-        case TaskStatus::Timeout:
-        case TaskStatus::Cancelled:
+        case Failed:
+        case Timeout:
+        case Cancelled:
             return true;
         default:
             return false;
@@ -58,47 +61,50 @@ constexpr bool canDelete(TaskStatus s) noexcept {
 }
 
 constexpr bool canReturnBinary(TaskStatus s, std::string_view storageKey) noexcept {
-    return s == TaskStatus::Success && !storageKey.empty();
+    using enum TaskStatus;
+    return s == Success && !storageKey.empty();
 }
 
 constexpr TaskStatus statusFromString(std::string_view s) noexcept {
+    using enum TaskStatus;
     if (s == "pending")
-        return TaskStatus::Pending;
+        return Pending;
     if (s == "queued")
-        return TaskStatus::Queued;
+        return Queued;
     if (s == "generating")
-        return TaskStatus::Generating;
+        return Generating;
     if (s == "success")
-        return TaskStatus::Success;
+        return Success;
     if (s == "failed")
-        return TaskStatus::Failed;
+        return Failed;
     if (s == "cancelled")
-        return TaskStatus::Cancelled;
+        return Cancelled;
     if (s == "timeout")
-        return TaskStatus::Timeout;
-    return TaskStatus::Unknown;
+        return Timeout;
+    return Unknown;
 }
 
 constexpr std::string_view statusToString(TaskStatus s) noexcept {
+    using enum TaskStatus;
     switch (s) {
-        case TaskStatus::Pending:
+        case Pending:
             return "pending";
-        case TaskStatus::Queued:
+        case Queued:
             return "queued";
-        case TaskStatus::Generating:
+        case Generating:
             return "generating";
-        case TaskStatus::Success:
+        case Success:
             return "success";
-        case TaskStatus::Failed:
+        case Failed:
             return "failed";
-        case TaskStatus::Cancelled:
+        case Cancelled:
             return "cancelled";
-        case TaskStatus::Timeout:
+        case Timeout:
             return "timeout";
-        case TaskStatus::Unknown:
+        case Unknown:
             return "unknown";
     }
     return "unknown"; // unreachable, but silences warnings
 }
 
-}
+} // namespace models

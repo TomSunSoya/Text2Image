@@ -97,3 +97,32 @@ TEST(TaskState_CanReturnBinary, NonSuccessWithKey) {
     EXPECT_FALSE(models::canReturnBinary(models::TaskStatus::Cancelled, "task-1.png"));
     EXPECT_FALSE(models::canReturnBinary(models::TaskStatus::Unknown, "task-1.png"));
 }
+
+// ==================== string conversion ====================
+
+TEST(TaskState_StringConversion, KnownStringsRoundTrip) {
+    using models::TaskStatus;
+
+    EXPECT_EQ(models::statusFromString("pending"), TaskStatus::Pending);
+    EXPECT_EQ(models::statusFromString("queued"), TaskStatus::Queued);
+    EXPECT_EQ(models::statusFromString("generating"), TaskStatus::Generating);
+    EXPECT_EQ(models::statusFromString("success"), TaskStatus::Success);
+    EXPECT_EQ(models::statusFromString("failed"), TaskStatus::Failed);
+    EXPECT_EQ(models::statusFromString("cancelled"), TaskStatus::Cancelled);
+    EXPECT_EQ(models::statusFromString("timeout"), TaskStatus::Timeout);
+
+    EXPECT_EQ(models::statusToString(TaskStatus::Pending), "pending");
+    EXPECT_EQ(models::statusToString(TaskStatus::Queued), "queued");
+    EXPECT_EQ(models::statusToString(TaskStatus::Generating), "generating");
+    EXPECT_EQ(models::statusToString(TaskStatus::Success), "success");
+    EXPECT_EQ(models::statusToString(TaskStatus::Failed), "failed");
+    EXPECT_EQ(models::statusToString(TaskStatus::Cancelled), "cancelled");
+    EXPECT_EQ(models::statusToString(TaskStatus::Timeout), "timeout");
+    EXPECT_EQ(models::statusToString(TaskStatus::Unknown), "unknown");
+}
+
+TEST(TaskState_StringConversion, UnknownStringMapsToUnknown) {
+    EXPECT_EQ(models::statusFromString(""), models::TaskStatus::Unknown);
+    EXPECT_EQ(models::statusFromString("done"), models::TaskStatus::Unknown);
+    EXPECT_EQ(models::statusFromString("SUCCESS"), models::TaskStatus::Unknown);
+}

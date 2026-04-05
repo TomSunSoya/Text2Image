@@ -6,9 +6,7 @@
       "hidden": true,
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "installDir": "${sourceDir}/out/install/${presetName}",
-      "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-      }
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
     },
     {
       "name": "windows-base",
@@ -37,9 +35,6 @@
         "type": "equals",
         "lhs": "${hostSystemName}",
         "rhs": "Linux"
-      },
-      "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "x64-linux"
       }
     },
     {
@@ -51,9 +46,6 @@
         "type": "equals",
         "lhs": "${hostSystemName}",
         "rhs": "Darwin"
-      },
-      "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "arm64-osx"
       }
     },
     {
@@ -84,7 +76,7 @@
     },
     {
       "name": "macos-debug",
-      "displayName": "macOS arm64 Debug",
+      "displayName": "macOS Debug",
       "inherits": "macos-base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
@@ -92,7 +84,7 @@
     },
     {
       "name": "macos-release",
-      "displayName": "macOS arm64 Release",
+      "displayName": "macOS Release",
       "inherits": "macos-base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"

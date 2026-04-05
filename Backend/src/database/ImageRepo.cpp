@@ -1,7 +1,6 @@
 #include "database/ImageRepo.h"
 
 #include <chrono>
-#include <ctime>
 #include <format>
 #include <iomanip>
 #include <mutex>
@@ -14,6 +13,8 @@
 #include <spdlog/spdlog.h>
 
 #include "database/db_manager.h"
+#include "models/failure_code.h"
+#include "utils/chrono_utils.h"
 
 namespace {
 
@@ -41,53 +42,9 @@ std::string imageTableName() {
     return "`" + imageSchemaName() + "`.`" + std::string(kImageTable) + "`";
 }
 
-std::string timeToDbString(const std::chrono::system_clock::time_point& tp) {
-    auto time = std::chrono::system_clock::to_time_t(tp);
-    std::tm tm{};
-#ifdef _WIN32
-    localtime_s(&tm, &time);
-#else
-    localtime_r(&time, &tm);
-#endif
-
-    return std::format("{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}", tm.tm_year + 1900,
-                       tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-}
-
-std::optional<std::chrono::system_clock::time_point> parseDbTime(std::string value) {
-    if (value.empty()) {
-        return std::nullopt;
-    }
-
-    const auto dotPos = value.find('.');
-    if (dotPos != std::string::npos) {
-        value = value.substr(0, dotPos);
-    }
-
-    for (auto& ch : value) {
-        if (ch == 'T') {
-            ch = ' ';
-        }
-    }
-
-    std::tm tm{};
-    std::istringstream iss(value);
-    iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-    if (iss.fail()) {
-        return std::nullopt;
-    }
-
-    const auto asTimeT = std::mktime(&tm);
-    if (asTimeT == -1) {
-        return std::nullopt;
-    }
-
-    return std::chrono::system_clock::from_time_t(asTimeT);
-}
-
 mysqlx::Value
 optionalTimeToValue(const std::optional<std::chrono::system_clock::time_point>& value) {
-    return value.has_value() ? mysqlx::Value(timeToDbString(*value)) : mysqlx::Value();
+    return value.has_value() ? mysqlx::Value(utils::chrono::toDbString(*value)) : mysqlx::Value();
 }
 
 bool columnExists(const std::string& schemaName, const std::string& tableName,
@@ -160,25 +117,25 @@ models::ImageGeneration rowToImageGeneration(const mysqlx::Row& row) {
     image.error_message = getStringOrEmpty(row, 17);
     image.generation_time = getDoubleOrDefault(row, 18, 0.0);
 
-    if (const auto createdAt = parseDbTime(getStringOrEmpty(row, 19))) {
+    if (const auto createdAt = utils::chrono::fromDbString(getStringOrEmpty(row, 19))) {
         image.created_at = *createdAt;
     } else {
         image.created_at = std::chrono::system_clock::now();
     }
 
-    if (const auto startedAt = parseDbTime(getStringOrEmpty(row, 20))) {
+    if (const auto startedAt = utils::chrono::fromDbString(getStringOrEmpty(row, 20))) {
         image.started_at = startedAt;
     }
 
-    if (const auto completedAt = parseDbTime(getStringOrEmpty(row, 21))) {
+    if (const auto completedAt = utils::chrono::fromDbString(getStringOrEmpty(row, 21))) {
         image.completed_at = completedAt;
     }
 
-    if (const auto cancelledAt = parseDbTime(getStringOrEmpty(row, 22))) {
+    if (const auto cancelledAt = utils::chrono::fromDbString(getStringOrEmpty(row, 22))) {
         image.cancelled_at = cancelledAt;
     }
 
-    if (const auto leaseExpiresAt = parseDbTime(getStringOrEmpty(row, 23))) {
+    if (const auto leaseExpiresAt = utils::chrono::fromDbString(getStringOrEmpty(row, 23))) {
         image.lease_expires_at = leaseExpiresAt;
     }
 
@@ -220,7 +177,6 @@ int64_t extractCount(mysqlx::SqlResult& result) {
 
     return static_cast<int64_t>(row[0].get<uint64_t>());
 }
-
 
 } // namespace
 
@@ -330,11 +286,10 @@ int64_t ImageRepo::insert(const models::ImageGeneration& generation) {
         .bind(generation.user_id, generation.request_id, generation.prompt,
               generation.negative_prompt, generation.num_steps, generation.height, generation.width,
               seedValue, statusToDbString(generation.status), generation.retry_count,
-              generation.max_retries,
-              generation.failure_code, generation.worker_id, generation.image_url,
-              generation.thumbnail_url, generation.storage_key, generation.error_message,
-              generation.generation_time, timeToDbString(createdAt),
-              optionalTimeToValue(generation.started_at),
+              generation.max_retries, generation.failure_code, generation.worker_id,
+              generation.image_url, generation.thumbnail_url, generation.storage_key,
+              generation.error_message, generation.generation_time,
+              utils::chrono::toDbString(createdAt), optionalTimeToValue(generation.started_at),
               optionalTimeToValue(generation.completed_at),
               optionalTimeToValue(generation.cancelled_at),
               optionalTimeToValue(generation.lease_expires_at))
@@ -459,8 +414,8 @@ std::optional<models::ImageGeneration> ImageRepo::claimNextTask(const std::strin
 
     const auto now = std::chrono::system_clock::now();
     const auto expiresAt = now + std::chrono::seconds(leaseSeconds <= 0 ? 900 : leaseSeconds);
-    const auto nowText = timeToDbString(now);
-    const auto expiresAtText = timeToDbString(expiresAt);
+    const auto nowText = utils::chrono::toDbString(now);
+    const auto expiresAtText = utils::chrono::toDbString(expiresAt);
 
     // Atomic UPDATE with subquery: only one worker can claim a given row.
     // The subquery selects the oldest eligible task; the outer UPDATE claims it
@@ -511,8 +466,8 @@ ImageRepo::claimTaskById(int64_t taskId, const std::string& workerId, long lease
 
     const auto now = std::chrono::system_clock::now();
     const auto expiresAt = now + std::chrono::seconds(leaseSeconds <= 0 ? 900 : leaseSeconds);
-    const auto nowText = timeToDbString(now);
-    const auto expiresAtText = timeToDbString(expiresAt);
+    const auto nowText = utils::chrono::toDbString(now);
+    const auto expiresAtText = utils::chrono::toDbString(expiresAt);
 
     auto update = database::DBManager::threadSession()
                       .sql("UPDATE " + imageTableName() +
@@ -554,7 +509,7 @@ std::vector<int64_t> ImageRepo::findQueuedTaskIds() {
 
 std::vector<int64_t> ImageRepo::expireLeasesReturningIds() {
     ensureTable();
-    const auto nowText = timeToDbString(std::chrono::system_clock::now());
+    const auto nowText = utils::chrono::toDbString(std::chrono::system_clock::now());
 
     // 先查出可重试的 ID
     auto selectRequeue = database::DBManager::threadSession()
@@ -581,7 +536,7 @@ bool ImageRepo::renewLease(int64_t id, int64_t userId, const std::string& worker
 
     const auto now = std::chrono::system_clock::now();
     const auto expiresAt = now + std::chrono::seconds(leaseSeconds <= 0 ? 900 : leaseSeconds);
-    const auto expiresAtText = timeToDbString(expiresAt);
+    const auto expiresAtText = utils::chrono::toDbString(expiresAt);
 
     auto result =
         database::DBManager::threadSession()
@@ -605,11 +560,11 @@ bool ImageRepo::finishClaimedTask(const models::ImageGeneration& generation) {
                  " failure_code = ?, thumbnail_url = ?, storage_key = ?, lease_expires_at = NULL, "
                  "worker_id = NULL "
                  " WHERE id = ? AND user_id = ? AND status = 'generating' AND worker_id = ?")
-            .bind(statusToDbString(generation.status), generation.image_url, generation.error_message,
-                  generation.generation_time, optionalTimeToValue(generation.completed_at),
-                  optionalTimeToValue(generation.cancelled_at), generation.failure_code,
-                  generation.thumbnail_url, generation.storage_key, generation.id,
-                  generation.user_id)
+            .bind(
+                statusToDbString(generation.status), generation.image_url, generation.error_message,
+                generation.generation_time, optionalTimeToValue(generation.completed_at),
+                optionalTimeToValue(generation.cancelled_at), generation.failure_code,
+                generation.thumbnail_url, generation.storage_key, generation.id, generation.user_id)
             .bind(generation.worker_id)
             .execute();
 
@@ -619,7 +574,7 @@ bool ImageRepo::finishClaimedTask(const models::ImageGeneration& generation) {
 bool ImageRepo::cancelByIdAndUserId(int64_t id, int64_t userId, models::ImageGeneration* updated) {
     ensureTable();
 
-    const auto nowText = timeToDbString(std::chrono::system_clock::now());
+    const auto nowText = utils::chrono::toDbString(std::chrono::system_clock::now());
 
     auto result =
         database::DBManager::threadSession()
@@ -688,18 +643,18 @@ bool ImageRepo::retryByIdAndUserId(int64_t id, int64_t userId, models::ImageGene
 int ImageRepo::expireLeases() {
     ensureTable();
 
-    const auto nowText = timeToDbString(std::chrono::system_clock::now());
+    const auto nowText = utils::chrono::toDbString(std::chrono::system_clock::now());
 
     // Tasks that can still retry: reset to 'queued'
     auto requeueResult =
         database::DBManager::threadSession()
             .sql("UPDATE " + imageTableName() +
                  " SET status = 'queued', worker_id = NULL, lease_expires_at = NULL,"
-                 "     retry_count = retry_count + 1, failure_code = 'lease_expired',"
+                 "     retry_count = retry_count + 1, failure_code = ?,"
                  "     error_message = 'worker lease expired, re-queued for retry'"
                  " WHERE status = 'generating' AND lease_expires_at IS NOT NULL"
                  "   AND lease_expires_at < ? AND retry_count < max_retries")
-            .bind(nowText)
+            .bind(std::string(models::failure::kLeaseExpired), nowText)
             .execute();
 
     // Tasks that exhausted retries: mark as 'timeout'
@@ -707,11 +662,11 @@ int ImageRepo::expireLeases() {
         database::DBManager::threadSession()
             .sql("UPDATE " + imageTableName() +
                  " SET status = 'timeout', worker_id = NULL, lease_expires_at = NULL,"
-                 "     completed_at = ?, failure_code = 'lease_expired_max_retries',"
+                 "     completed_at = ?, failure_code = ?,"
                  "     error_message = 'worker lease expired and max retries reached'"
                  " WHERE status = 'generating' AND lease_expires_at IS NOT NULL"
                  "   AND lease_expires_at < ? AND retry_count >= max_retries")
-            .bind(nowText, nowText)
+            .bind(nowText, std::string(models::failure::kLeaseExpiredMaxRetries), nowText)
             .execute();
 
     return static_cast<int>(requeueResult.getAffectedItemsCount() +
@@ -723,8 +678,9 @@ bool ImageRepo::updateStatusAndError(int64_t id, int64_t userId, models::TaskSta
     ensureTable();
 
     mysqlx::Value completedAt =
-        models::isTerminal(status) ? mysqlx::Value(timeToDbString(std::chrono::system_clock::now()))
-                                 : mysqlx::Value();
+        models::isTerminal(status)
+            ? mysqlx::Value(utils::chrono::toDbString(std::chrono::system_clock::now()))
+            : mysqlx::Value();
 
     auto result =
         database::DBManager::threadSession()

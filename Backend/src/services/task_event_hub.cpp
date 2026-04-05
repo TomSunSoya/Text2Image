@@ -1,5 +1,7 @@
 #include "services/task_event_hub.h"
 
+#include <ranges>
+
 #include <nlohmann/json.hpp>
 
 TaskEventHub& TaskEventHub::instance() {
@@ -70,19 +72,13 @@ void TaskEventHub::publishTaskUpdated(const models::ImageGeneration& generation)
 std::vector<drogon::WebSocketConnectionPtr>
 TaskEventHub::copySubscribersLocked(int64_t userId) const {
     std::lock_guard lock(mutex_);
-    std::vector<drogon::WebSocketConnectionPtr> subscribers;
 
     const auto it = subscribers_.find(userId);
     if (it == subscribers_.end()) {
-        return subscribers;
+        return {};
     }
 
-    subscribers.reserve(it->second.size());
-    for (const auto& [_, connection] : it->second) {
-        if (connection) {
-            subscribers.push_back(connection);
-        }
-    }
-
-    return subscribers;
+    auto valid = it->second | std::views::values |
+                 std::views::filter([](const auto& conn) { return conn != nullptr; });
+    return {valid.begin(), valid.end()};
 }

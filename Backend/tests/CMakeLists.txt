@@ -1,4 +1,3 @@
-enable_testing()
 find_package(GTest CONFIG REQUIRED)
 
 # Collect all library sources (exclude main.cpp to avoid duplicate main)

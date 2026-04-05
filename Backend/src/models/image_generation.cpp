@@ -1,25 +1,12 @@
 #include "models/image_generation.h"
-#include <ctime>
-#include <format>
+#include "utils/chrono_utils.h"
 
 namespace models {
-
-static std::string timeToString(const std::chrono::system_clock::time_point& tp) {
-    auto time = std::chrono::system_clock::to_time_t(tp);
-    std::tm tm{};
-#ifdef _WIN32
-    localtime_s(&tm, &time);
-#else
-    localtime_r(&time, &tm);
-#endif
-    return std::format("{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}", tm.tm_year + 1900,
-                       tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-}
 
 static void putOptionalTime(nlohmann::json& j, const char* key,
                             const std::optional<std::chrono::system_clock::time_point>& value) {
     if (value.has_value())
-        j[key] = timeToString(*value);
+        j[key] = utils::chrono::toDbString(*value);
 }
 
 static std::optional<std::string> readStringAny(const nlohmann::json& j,
@@ -80,7 +67,7 @@ nlohmann::json ImageGeneration::toJson() const {
                         {"imageUrl", image_url},
                         {"errorMessage", error_message},
                         {"generationTime", generation_time},
-                        {"createdAt", timeToString(created_at)},
+                        {"createdAt", utils::chrono::toDbString(created_at)},
                         {"thumbnailUrl", thumbnail_url},
                         {"storageKey", storage_key}};
 
