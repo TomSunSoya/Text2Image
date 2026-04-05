@@ -268,9 +268,6 @@ models::TaskStatus normalizeTaskStatus(std::string_view rawStatus) {
     return models::statusFromString(status);
 }
 
-std::string statusToDetailString(models::TaskStatus status) {
-    return std::string(models::statusToString(status));
-}
 
 std::optional<std::string> getStringField(const nlohmann::json& json, const char* key) {
     if (!json.contains(key) || !json.at(key).is_string()) {
@@ -799,7 +796,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::cancelById(int64_t use
         if (!models::canCancel(current->status)) {
             ServiceError err{drogon::k400BadRequest, "task_cancel_not_allowed",
                              "task is already completed and cannot be cancelled"};
-            err.details["status"] = statusToDetailString(current->status);
+            err.details["status"] = models::statusToStdString(current->status);
             return std::unexpected(std::move(err));
         }
 
@@ -852,7 +849,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::retryById(int64_t user
         if (!models::canRetry(current->status, current->retry_count, current->max_retries)) {
             ServiceError err{drogon::k409Conflict, "task_retry_not_allowed",
                              "only failed, timeout or canceled tasks can be retried"};
-            err.details["status"] = statusToDetailString(current->status);
+            err.details["status"] = models::statusToStdString(current->status);
             err.details["retryCount"] = current->retry_count;
             err.details["maxRetries"] = current->max_retries;
             return std::unexpected(std::move(err));
@@ -893,7 +890,7 @@ std::expected<ImageBinaryResult, ServiceError> ImageService::getBinaryById(int64
         if (!models::canReturnBinary(image->status, image->storage_key)) {
             ServiceError err{drogon::k409Conflict, "image_binary_not_ready",
                              "image binary is not ready"};
-            err.details["status"] = statusToDetailString(image->status);
+            err.details["status"] = models::statusToStdString(image->status);
             return std::unexpected(std::move(err));
         }
 
@@ -934,7 +931,7 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
         if (!models::canDelete(current->status)) {
             ServiceError err{drogon::k400BadRequest, "task_delete_not_allowed",
                              "only completed tasks can be deleted"};
-            err.details["status"] = statusToDetailString(current->status);
+            err.details["status"] = models::statusToStdString(current->status);
             return std::unexpected(std::move(err));
         }
 

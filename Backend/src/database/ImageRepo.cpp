@@ -2,9 +2,7 @@
 
 #include <chrono>
 #include <format>
-#include <iomanip>
 #include <mutex>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -89,9 +87,6 @@ double getDoubleOrDefault(const mysqlx::Row& row, int index, double fallback) {
     return row[index].get<double>();
 }
 
-std::string statusToDbString(models::TaskStatus status) {
-    return std::string(models::statusToString(status));
-}
 
 models::ImageGeneration rowToImageGeneration(const mysqlx::Row& row) {
     models::ImageGeneration image;
@@ -285,7 +280,7 @@ int64_t ImageRepo::insert(const models::ImageGeneration& generation) {
         )")
         .bind(generation.user_id, generation.request_id, generation.prompt,
               generation.negative_prompt, generation.num_steps, generation.height, generation.width,
-              seedValue, statusToDbString(generation.status), generation.retry_count,
+              seedValue, models::statusToStdString(generation.status), generation.retry_count,
               generation.max_retries, generation.failure_code, generation.worker_id,
               generation.image_url, generation.thumbnail_url, generation.storage_key,
               generation.error_message, generation.generation_time,
@@ -338,7 +333,7 @@ ImagePageResult ImageRepo::findByUserIdAndStatus(int64_t userId, models::TaskSta
     const int safePage = normalizePage(page);
     const int safeSize = normalizeSize(size);
     const int64_t offset = static_cast<int64_t>(safePage) * static_cast<int64_t>(safeSize);
-    const auto statusText = statusToDbString(status);
+    const auto statusText = models::statusToStdString(status);
 
     auto result = database::DBManager::threadSession()
                       .sql(std::string("SELECT ") + kColumns + ", COUNT(*) OVER() AS total_count" +
@@ -561,7 +556,7 @@ bool ImageRepo::finishClaimedTask(const models::ImageGeneration& generation) {
                  "worker_id = NULL "
                  " WHERE id = ? AND user_id = ? AND status = 'generating' AND worker_id = ?")
             .bind(
-                statusToDbString(generation.status), generation.image_url, generation.error_message,
+                models::statusToStdString(generation.status), generation.image_url, generation.error_message,
                 generation.generation_time, optionalTimeToValue(generation.completed_at),
                 optionalTimeToValue(generation.cancelled_at), generation.failure_code,
                 generation.thumbnail_url, generation.storage_key, generation.id, generation.user_id)
@@ -687,7 +682,7 @@ bool ImageRepo::updateStatusAndError(int64_t id, int64_t userId, models::TaskSta
             .sql(
                 "UPDATE " + imageTableName() +
                 " SET status = ?, error_message = ?, completed_at = ? WHERE id = ? AND user_id = ?")
-            .bind(statusToDbString(status), errorMessage, completedAt, id, userId)
+            .bind(models::statusToStdString(status), errorMessage, completedAt, id, userId)
             .execute();
 
     return result.getAffectedItemsCount() > 0;

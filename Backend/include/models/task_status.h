@@ -107,4 +107,8 @@ constexpr std::string_view statusToString(TaskStatus s) noexcept {
     return "unknown"; // unreachable, but silences warnings
 }
 
+inline std::string statusToStdString(TaskStatus s) {
+    return std::string(statusToString(s));
+}
+
 } // namespace models
