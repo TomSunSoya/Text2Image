@@ -20,7 +20,7 @@ struct ServiceError {
     ServiceError(drogon::HttpStatusCode s, std::string c, std::string m, nlohmann::json d)
         : status(s), code(std::move(c)), message(std::move(m)), details(std::move(d)) {}
 
-    nlohmann::json toJson() const {
+    [[nodiscard]] nlohmann::json toJson() const {
         nlohmann::json body = {{"code", code}, {"message", message}};
 
         if (details.is_object() && !details.empty()) {

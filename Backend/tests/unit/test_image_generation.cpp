@@ -72,7 +72,7 @@ TEST(ImageGeneration_ToJson, BasicFields) {
     gen.user_id = 1;
     gen.request_id = "req-abc";
     gen.prompt = "test prompt";
-    gen.status = "queued";
+    gen.status = models::TaskStatus::Queued;
     gen.num_steps = 20;
     gen.height = 512;
     gen.width = 768;
@@ -126,15 +126,15 @@ TEST(ImageGeneration_ToJson, OptionalTimesExcludedWhenUnset) {
 TEST(ImageGeneration_IsTerminal, MatchesTaskStateMachine) {
     models::ImageGeneration gen;
 
-    gen.status = "success";
-    EXPECT_TRUE(gen.isTerminal());
+    gen.status = models::TaskStatus::Success;
+    EXPECT_TRUE(models::isTerminal(gen.status));
 
-    gen.status = "failed";
-    EXPECT_TRUE(gen.isTerminal());
+    gen.status = models::TaskStatus::Failed;
+    EXPECT_TRUE(models::isTerminal(gen.status));
 
-    gen.status = "queued";
-    EXPECT_FALSE(gen.isTerminal());
+    gen.status = models::TaskStatus::Queued;
+    EXPECT_FALSE(models::isTerminal(gen.status));
 
-    gen.status = "generating";
-    EXPECT_FALSE(gen.isTerminal());
+    gen.status = models::TaskStatus::Generating;
+    EXPECT_FALSE(models::isTerminal(gen.status));
 }

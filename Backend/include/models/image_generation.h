@@ -5,6 +5,8 @@
 #include <chrono>
 #include <nlohmann/json.hpp>
 
+#include "task_status.h"
+
 namespace models {
 
 class ImageGeneration {
@@ -18,7 +20,7 @@ class ImageGeneration {
     int height{768};
     int width{768};
     std::optional<int> seed;
-    std::string status{"pending"};
+    TaskStatus status{TaskStatus::Pending};
 
     int retry_count{0};
     int max_retries{3};
@@ -37,8 +39,6 @@ class ImageGeneration {
     std::optional<std::chrono::system_clock::time_point> completed_at;
     std::optional<std::chrono::system_clock::time_point> cancelled_at;
     std::optional<std::chrono::system_clock::time_point> lease_expires_at;
-
-    bool isTerminal() const;
 
     nlohmann::json toJson() const;
 

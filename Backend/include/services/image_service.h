@@ -38,20 +38,24 @@ class ImageService {
   public:
     static void bootstrapWorkers();
 
-    std::expected<ImageCreateResult, ServiceError> create(int64_t userId,
-                                                          const nlohmann::json& payload) const;
+    [[nodiscard]] std::expected<ImageCreateResult, ServiceError>
+    create(int64_t userId, const nlohmann::json& payload) const;
 
-    std::expected<ImageListResult, ServiceError> listMy(int64_t userId, int page, int size) const;
-    std::expected<ImageListResult, ServiceError>
+    [[nodiscard]] std::expected<ImageListResult, ServiceError> listMy(int64_t userId, int page,
+                                                                      int size) const;
+    [[nodiscard]] std::expected<ImageListResult, ServiceError>
     listMyByStatus(int64_t userId, const std::string& status, int page, int size) const;
 
-    std::expected<ImageGetResult, ServiceError> getById(int64_t userId, int64_t id,
-                                                        bool includeImagePayload = true) const;
-    std::expected<ImageGetResult, ServiceError> cancelById(int64_t userId, int64_t id) const;
-    std::expected<ImageGetResult, ServiceError> retryById(int64_t userId, int64_t id) const;
-    std::expected<ImageBinaryResult, ServiceError> getBinaryById(int64_t userId, int64_t id) const;
+    [[nodiscard]] std::expected<ImageGetResult, ServiceError>
+    getById(int64_t userId, int64_t id, bool includeImagePayload = true) const;
+    [[nodiscard]] std::expected<ImageGetResult, ServiceError> cancelById(int64_t userId,
+                                                                         int64_t id) const;
+    [[nodiscard]] std::expected<ImageGetResult, ServiceError> retryById(int64_t userId,
+                                                                        int64_t id) const;
+    [[nodiscard]] std::expected<ImageBinaryResult, ServiceError> getBinaryById(int64_t userId,
+                                                                               int64_t id) const;
 
-    std::expected<void, ServiceError> deleteById(int64_t userId, int64_t id) const;
+    [[nodiscard]] std::expected<void, ServiceError> deleteById(int64_t userId, int64_t id) const;
 
-    ImageHealthResult checkHealth() const;
+    [[nodiscard]] ImageHealthResult checkHealth() const;
 };

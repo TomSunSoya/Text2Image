@@ -99,6 +99,7 @@ jobs:
             -e TEST_DB_PORT=33060 \
             -e TEST_DB_USERNAME=root \
             -e TEST_DB_PASSWORD=CHANGE_ME_ROOT \
+            -e TEST_DB_SSL=true \
             -e JWT_SECRET=ci-jwt-secret \
             zimage-backend-unit-tests \
             ctest --test-dir /src/build --output-on-failure -R IntegrationTests

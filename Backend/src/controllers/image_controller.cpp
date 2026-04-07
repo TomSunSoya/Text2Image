@@ -1,6 +1,8 @@
 #include "controllers/image_controller.h"
 
+#include <charconv>
 #include <optional>
+#include <ranges>
 
 #include <drogon/HttpResponse.h>
 #include <nlohmann/json.hpp>
@@ -12,25 +14,16 @@
 namespace {
 
 int parsePositiveInt(const std::string& value, int fallback) {
-    if (value.empty()) {
-        return fallback;
-    }
-
-    try {
-        const int parsed = std::stoi(value);
-        return parsed > 0 ? parsed : fallback;
-    } catch (...) {
-        return fallback;
-    }
+    int parsed{};
+    auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+    return ec == std::errc{} && parsed > 0 ? parsed : fallback;
 }
 
 nlohmann::json toListJson(const ImageListResult& result) {
-    nlohmann::json content = nlohmann::json::array();
-    for (const auto& item : result.content) {
-        content.push_back(item.toJson());
-    }
+    auto content = result.content | std::views::transform(&models::ImageGeneration::toJson);
 
-    return {{"content", content}, {"totalElements", result.total_elements}};
+    return {{"content", nlohmann::json(std::vector(content.begin(), content.end()))},
+            {"totalElements", result.total_elements}};
 }
 
 nlohmann::json toStatusJson(const models::ImageGeneration& generation) {
@@ -96,20 +89,24 @@ std::optional<int64_t> resolveUserId(const drogon::HttpRequestPtr& req,
     }
 
     // Fallback: parse token ourselves (for unfiltered routes).
-    const auto token = utils::extractBearerToken(req);
-    if (!token) {
-        fillDirectError(resp, drogon::k401Unauthorized, "missing_bearer_token",
-                        "missing bearer token");
-        return std::nullopt;
-    }
-
-    const auto payload = utils::verifyToken(*token);
-    if (!payload || payload->user_id <= 0) {
-        fillDirectError(resp, drogon::k401Unauthorized, "invalid_token", "invalid token");
-        return std::nullopt;
-    }
-
-    return payload->user_id;
+    bool tokenPresent = false;
+    return utils::extractBearerToken(req)
+        .and_then([&](const std::string& token) {
+            tokenPresent = true;
+            return utils::verifyToken(token);
+        })
+        .and_then([](const auto& payload) -> std::optional<int64_t> {
+            return payload.user_id > 0 ? std::optional<int64_t>{payload.user_id} : std::nullopt;
+        })
+        .or_else([&]() -> std::optional<int64_t> {
+            if (!tokenPresent) {
+                fillDirectError(resp, drogon::k401Unauthorized, "missing_bearer_token",
+                                "missing bearer token");
+            } else {
+                fillDirectError(resp, drogon::k401Unauthorized, "invalid_token", "invalid token");
+            }
+            return std::nullopt;
+        });
 }
 
 } // namespace
