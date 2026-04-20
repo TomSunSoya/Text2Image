@@ -84,8 +84,8 @@ int main() {
                 }
 
                 if (attempt < kMinioMaxAttempts) {
-                    spdlog::warn("MinIO not ready yet ({}/{}), retrying in {}s",
-                                 attempt, kMinioMaxAttempts, kMinioRetryDelay.count());
+                    spdlog::warn("MinIO not ready yet ({}/{}), retrying in {}s", attempt,
+                                 kMinioMaxAttempts, kMinioRetryDelay.count());
                     std::this_thread::sleep_for(kMinioRetryDelay);
                 }
             }
@@ -125,13 +125,21 @@ int main() {
         constexpr size_t kMaxBodySize = 1 * 1024 * 1024;
 
         // --- CORS setup ---
-        bool corsAllowAll = false;
-        std::vector<std::string> corsOrigins;
-        std::string corsAllowMethods = "GET, POST, PUT, DELETE, OPTIONS";
-        std::string corsAllowHeaders = "Content-Type, Authorization";
-
         if (config.contains("cors") && config.at("cors").value("enabled", false)) {
             const auto& corsConfig = config.at("cors");
+            bool corsAllowAll = false;
+            std::vector<std::string> corsOrigins;
+
+            const auto joinHeaderList = [](const std::vector<std::string>& values) {
+                std::string joined;
+                for (size_t i = 0; i < values.size(); ++i) {
+                    if (i > 0) {
+                        joined += ", ";
+                    }
+                    joined += values[i];
+                }
+                return joined;
+            };
 
             auto origins = corsConfig.value("allow_origins", std::vector<std::string>{});
             for (const auto& origin : origins) {
@@ -141,24 +149,14 @@ int main() {
                 corsOrigins.push_back(origin);
             }
 
-            auto methods =
+            const auto methods =
                 corsConfig.value("allow_methods", std::vector<std::string>{"GET", "POST", "PUT",
                                                                            "DELETE", "OPTIONS"});
-            corsAllowMethods.clear();
-            for (size_t i = 0; i < methods.size(); ++i) {
-                if (i > 0)
-                    corsAllowMethods += ", ";
-                corsAllowMethods += methods[i];
-            }
 
-            auto headers = corsConfig.value(
+            const auto headers = corsConfig.value(
                 "allow_headers", std::vector<std::string>{"Content-Type", "Authorization"});
-            corsAllowHeaders.clear();
-            for (size_t i = 0; i < headers.size(); ++i) {
-                if (i > 0)
-                    corsAllowHeaders += ", ";
-                corsAllowHeaders += headers[i];
-            }
+            const auto corsAllowMethods = joinHeaderList(methods);
+            const auto corsAllowHeaders = joinHeaderList(headers);
 
             if (corsAllowAll) {
                 spdlog::warn("CORS allow_origins contains '*' — all origins accepted. "
