@@ -6,27 +6,23 @@
 #include <string>
 #include <vector>
 
+#include "database/i_image_repo.h"
 #include "models/image_generation.h"
 
-struct ImagePageResult {
-    std::vector<models::ImageGeneration> content;
-    int64_t total_elements{0};
-};
-
-class ImageRepo {
+class ImageRepo : public IImageRepo {
   public:
-    int64_t insert(const models::ImageGeneration& generation);
+    int64_t insert(const models::ImageGeneration& generation) override;
 
-    ImagePageResult findByUserId(int64_t userId, int page, int size);
+    ImagePageResult findByUserId(int64_t userId, int page, int size) override;
     ImagePageResult findByUserIdAndStatus(int64_t userId, models::TaskStatus status, int page,
-                                          int size);
-
-    [[nodiscard]] std::optional<models::ImageGeneration> findByIdAndUserId(int64_t id,
-                                                                           int64_t userId);
-    bool deleteByIdAndUserId(int64_t id, int64_t userId);
+                                          int size) override;
 
     [[nodiscard]] std::optional<models::ImageGeneration>
-    findByRequestIdAndUserId(const std::string& requestId, int64_t userId);
+    findByIdAndUserId(int64_t id, int64_t userId) override;
+    bool deleteByIdAndUserId(int64_t id, int64_t userId) override;
+
+    [[nodiscard]] std::optional<models::ImageGeneration>
+    findByRequestIdAndUserId(const std::string& requestId, int64_t userId) override;
     [[nodiscard]] std::optional<models::ImageGeneration> claimNextTask(const std::string& workerId,
                                                                        long leaseSeconds);
     [[nodiscard]] std::optional<models::ImageGeneration>
@@ -38,9 +34,9 @@ class ImageRepo {
 
     [[nodiscard]] bool finishClaimedTask(const models::ImageGeneration& generation);
     [[nodiscard]] bool cancelByIdAndUserId(int64_t id, int64_t userId,
-                                           models::ImageGeneration* updated = nullptr);
+                                           models::ImageGeneration* updated = nullptr) override;
     [[nodiscard]] bool retryByIdAndUserId(int64_t id, int64_t userId,
-                                          models::ImageGeneration* updated = nullptr);
+                                          models::ImageGeneration* updated = nullptr) override;
 
     int expireLeases();
 

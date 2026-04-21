@@ -2,40 +2,21 @@
 
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <string>
-#include <vector>
 
 #include <nlohmann/json.hpp>
 
-#include "models/image_generation.h"
+#include "database/i_image_repo.h"
+#include "models/i_image_storage.h"
+#include "services/image_service_types.h"
 #include "services/service_error.h"
-
-struct ImageCreateResult {
-    models::ImageGeneration generation;
-};
-
-struct ImageListResult {
-    std::vector<models::ImageGeneration> content;
-    int64_t total_elements{0};
-};
-
-struct ImageGetResult {
-    models::ImageGeneration generation;
-};
-
-struct ImageBinaryResult {
-    std::string body;
-    std::string content_type{"image/png"};
-};
-
-struct ImageHealthResult {
-    std::string status{"unhealthy"};
-    bool model_loaded{false};
-    std::string detail;
-};
 
 class ImageService {
   public:
+    ImageService();
+    ImageService(std::shared_ptr<IImageRepo> repo, std::shared_ptr<IImageStorage> storage);
+
     static void bootstrapWorkers();
 
     [[nodiscard]] std::expected<ImageCreateResult, ServiceError>
@@ -58,4 +39,8 @@ class ImageService {
     [[nodiscard]] std::expected<void, ServiceError> deleteById(int64_t userId, int64_t id) const;
 
     [[nodiscard]] ImageHealthResult checkHealth() const;
+
+  private:
+    std::shared_ptr<IImageRepo> repo_;
+    std::shared_ptr<IImageStorage> storage_;
 };
