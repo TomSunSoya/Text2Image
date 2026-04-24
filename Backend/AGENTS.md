@@ -43,12 +43,21 @@ Follow existing file conventions:
 Use 4-space indentation and keep style consistent with nearby code when editing.
 
 ## Testing Guidelines
-There is currently no dedicated `tests/` target or `ctest` suite in this repository.
-For now, validate changes with build + smoke tests:
-- `GET /health`
-- auth/image API flows touched by your change
+Tests live in `tests/` with two suites: `tests/unit/` and `tests/integration/`. CMake defines three CTest targets: `UnitTests`, `IntegrationTests`, and `TaskEngineIntegrationTests`. Test sources are auto-discovered via `GLOB_RECURSE` and linked against the shared backend library (excluding `main.cpp`).
 
-When adding automated tests, place them in a new `tests/` directory, wire them through CMake/CTest, and document how to run them.
+After building with `cmake --build out/build/x64-debug --config Debug`, run all tests via:
+
+```powershell
+ctest --test-dir out/build/x64-debug -C Debug --output-on-failure
+```
+
+Or run a specific suite:
+
+```powershell
+ctest --test-dir out/build/x64-debug -C Debug -R UnitTests --output-on-failure
+ctest --test-dir out/build/x64-debug -C Debug -R IntegrationTests --output-on-failure
+ctest --test-dir out/build/x64-debug -C Debug -R TaskEngineIntegrationTests --output-on-failure
+```
 
 ## Commit & Pull Request Guidelines
 History is minimal; existing commits use short, imperative summaries (for example, `Complete backend service skeleton`).

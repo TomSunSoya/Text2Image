@@ -98,8 +98,7 @@ std::optional<ServiceError> validateGenerationParams(models::ImageGeneration& ge
     return std::nullopt;
 }
 
-void presignListImages(const IImageStorage& storage,
-                       std::vector<models::ImageGeneration>& images) {
+void presignListImages(const IImageStorage& storage, std::vector<models::ImageGeneration>& images) {
     for (auto& img :
          images | std::views::filter([](const auto& i) { return !i.storage_key.empty(); })) {
         try {
@@ -108,8 +107,7 @@ void presignListImages(const IImageStorage& storage,
             spdlog::error("presignListImages: failed to presign storage_key='{}': {}",
                           img.storage_key, ex.what());
         } catch (...) {
-            spdlog::error("presignListImages: unknown error for storage_key='{}'",
-                          img.storage_key);
+            spdlog::error("presignListImages: unknown error for storage_key='{}'", img.storage_key);
         }
     }
 }
@@ -423,5 +421,5 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
 }
 
 ImageHealthResult ImageService::checkHealth() const {
-    return GenerationClient::checkHealth();
+    return generation_client_.checkHealth();
 }

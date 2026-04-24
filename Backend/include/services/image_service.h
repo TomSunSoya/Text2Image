@@ -9,6 +9,7 @@
 
 #include "database/i_image_repo.h"
 #include "models/i_image_storage.h"
+#include "services/generation_client.h"
 #include "services/image_service_types.h"
 #include "services/service_error.h"
 
@@ -43,4 +44,5 @@ class ImageService {
   private:
     std::shared_ptr<IImageRepo> repo_;
     std::shared_ptr<IImageStorage> storage_;
+    GenerationClient generation_client_;
 };

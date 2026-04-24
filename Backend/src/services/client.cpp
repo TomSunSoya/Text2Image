@@ -170,10 +170,8 @@ bool HttpResult::ok() const {
     return error.empty() && status_code >= 200 && status_code < 300;
 }
 
-HttpClient::HttpClient(long timeoutSeconds) : timeout_seconds_(timeoutSeconds) {}
-
-HttpResult HttpClient::get(const std::string& url, const std::vector<std::string>& headers,
-                           bool followRedirects) const {
+HttpResult HttpClient::get(const std::string& url, long timeoutSeconds,
+                           const std::vector<std::string>& headers, bool followRedirects) const {
     constexpr int kMaxRedirects = 5;
     std::string currentUrl = url;
 
@@ -185,7 +183,7 @@ HttpResult HttpClient::get(const std::string& url, const std::vector<std::string
             return invalid;
         }
 
-        auto envelope = sendOnce(*parsed, drogon::Get, nullptr, headers, timeout_seconds_);
+        auto envelope = sendOnce(*parsed, drogon::Get, nullptr, headers, timeoutSeconds);
 
         if (!followRedirects || !envelope.response) {
             return envelope.http;
@@ -209,7 +207,8 @@ HttpResult HttpClient::get(const std::string& url, const std::vector<std::string
     }
 }
 
-HttpResult HttpClient::postJson(const std::string& url, const std::string& payload,
+HttpResult HttpClient::postJson(const std::string& url, long timeoutSeconds,
+                                const std::string& payload,
                                 const std::vector<std::string>& headers) const {
     const auto parsed = parseUrl(url);
     if (!parsed) {
@@ -218,6 +217,6 @@ HttpResult HttpClient::postJson(const std::string& url, const std::string& paylo
         return invalid;
     }
 
-    auto envelope = sendOnce(*parsed, drogon::Post, &payload, headers, timeout_seconds_);
+    auto envelope = sendOnce(*parsed, drogon::Post, &payload, headers, timeoutSeconds);
     return envelope.http;
 }

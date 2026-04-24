@@ -62,6 +62,7 @@ std::chrono::seconds leaseRenewInterval(long leaseSeconds) {
 
 struct TaskEngine::Impl {
     TaskEngineConfig config{loadTaskEngineConfig()};
+    GenerationClient generation_client;
     std::vector<std::jthread> workers;
     std::once_flag start_once;
     std::mutex notify_mutex;
@@ -95,7 +96,8 @@ struct TaskEngine::Impl {
         notifyWorkers();
     }
 
-    std::jthread startLeaseKeeper(const models::ImageGeneration& task, const std::string& workerId) {
+    std::jthread startLeaseKeeper(const models::ImageGeneration& task,
+                                  const std::string& workerId) {
         const auto renewEvery = leaseRenewInterval(config.lease_seconds);
 
         return std::jthread([taskId = task.id, userId = task.user_id, workerId,
@@ -147,12 +149,13 @@ struct TaskEngine::Impl {
 
     void processClaimedTask(ImageRepo& repo, models::ImageGeneration& task,
                             const std::string& workerId) {
-        spdlog::info("task worker claimed task id = {}, user_id = {}, request_id = {}, worker_id = {}",
-                     task.id, task.user_id, task.request_id, workerId);
+        spdlog::info(
+            "task worker claimed task id = {}, user_id = {}, request_id = {}, worker_id = {}",
+            task.id, task.user_id, task.request_id, workerId);
         TaskEventHub::instance().publishTaskUpdated(task);
 
         auto leaseKeeper = startLeaseKeeper(task, workerId);
-        auto result = GenerationClient::generate(task);
+        auto result = generation_client.generate(task);
         const bool finished = repo.finishClaimedTask(result);
         leaseKeeper.request_stop();
 

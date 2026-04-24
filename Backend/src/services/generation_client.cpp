@@ -4,9 +4,12 @@
 #include <chrono>
 #include <cctype>
 #include <format>
+#include <memory>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <string>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -21,9 +24,9 @@ namespace {
 
 using Clock = std::chrono::system_clock;
 
-std::string downloadImageBytes(const std::string& url, long timeoutSeconds) {
-    HttpClient client(timeoutSeconds);
-    auto response = client.get(url, {}, true);
+std::string downloadImageBytes(const std::string& url, long timeoutSeconds,
+                               const IHttpClient& httpClient) {
+    auto response = httpClient.get(url, timeoutSeconds, {}, true);
     if (!response.ok() || response.body.empty()) {
         return {};
     }
@@ -125,7 +128,16 @@ void persistGeneratedImage(models::ImageGeneration& generation) {
 
 } // namespace
 
-models::ImageGeneration GenerationClient::generate(models::ImageGeneration generation) {
+GenerationClient::GenerationClient() : httpClient_(std::make_shared<HttpClient>()) {}
+
+GenerationClient::GenerationClient(std::shared_ptr<IHttpClient> httpClient)
+    : httpClient_(std::move(httpClient)) {
+    if (!httpClient_) {
+        throw std::invalid_argument("GenerationClient httpClient must not be null");
+    }
+}
+
+models::ImageGeneration GenerationClient::generate(models::ImageGeneration generation) const {
     long timeoutSeconds = 900;
     std::string serviceUrl;
 
@@ -144,9 +156,8 @@ models::ImageGeneration GenerationClient::generate(models::ImageGeneration gener
             modelPayload["seed"] = generation.seed.value();
         }
 
-        HttpClient client(timeoutSeconds);
         const auto generateUrl = serviceUrl + "/generate";
-        auto response = client.postJson(generateUrl, modelPayload.dump());
+        auto response = httpClient_->postJson(generateUrl, timeoutSeconds, modelPayload.dump());
         if (!response.ok()) {
             generation.status = models::TaskStatus::Failed;
             generation.failure_code = std::string(models::failure::kPythonServiceRequestFailed);
@@ -193,7 +204,8 @@ models::ImageGeneration GenerationClient::generate(models::ImageGeneration gener
         if (!isAbsoluteHttpUrl && !serviceUrl.empty() && generation.image_url.starts_with("/")) {
             generation.image_url = serviceUrl + generation.image_url;
         }
-        generation.image_bytes = downloadImageBytes(generation.image_url, timeoutSeconds);
+        generation.image_bytes =
+            downloadImageBytes(generation.image_url, timeoutSeconds, *httpClient_);
     }
 
     if (!generation.image_bytes.empty() && generation.status != models::TaskStatus::Failed) {
@@ -221,7 +233,7 @@ models::ImageGeneration GenerationClient::generate(models::ImageGeneration gener
     return generation;
 }
 
-ImageHealthResult GenerationClient::checkHealth() {
+ImageHealthResult GenerationClient::checkHealth() const {
     ImageHealthResult result;
 
     try {
@@ -235,8 +247,7 @@ ImageHealthResult GenerationClient::checkHealth() {
         }
         timeoutSeconds = (std::min)(timeoutSeconds, 10L);
 
-        HttpClient client(timeoutSeconds);
-        const auto response = client.get(serviceUrl + "/health");
+        const auto response = httpClient_->get(serviceUrl + "/health", timeoutSeconds);
 
         if (!response.ok()) {
             result.status = "unhealthy";
