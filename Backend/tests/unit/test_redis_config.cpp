@@ -6,6 +6,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <system_error>
 
 #include "Backend.h"
 #include "services/redis_client.h"
@@ -65,18 +66,30 @@ class ScopedEnvVar {
     std::optional<std::string> original_;
 };
 
-std::filesystem::path writeTempConfig(const nlohmann::json& config) {
-    const auto fileName =
-        "backend-redis-config-test-" +
-        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json";
-    const auto path = std::filesystem::temp_directory_path() / fileName;
+class TempConfigFile {
+  public:
+    explicit TempConfigFile(const nlohmann::json& config) {
+        const auto fileName =
+            "backend-redis-config-test-" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json";
+        path_ = std::filesystem::temp_directory_path() / fileName;
 
-    std::ofstream out(path);
-    out << config.dump(2);
-    out.close();
+        std::ofstream out(path_);
+        out << config.dump(2);
+    }
 
-    return path;
-}
+    ~TempConfigFile() {
+        std::error_code ec;
+        std::filesystem::remove(path_, ec);
+    }
+
+    [[nodiscard]] const std::filesystem::path& path() const {
+        return path_;
+    }
+
+  private:
+    std::filesystem::path path_;
+};
 
 } // namespace
 
@@ -131,9 +144,10 @@ TEST(BackendConfig, LoadConfigAppliesRedisEnvOverrides) {
     const ScopedEnvVar timeoutOverride("REDIS_SOCKET_TIMEOUT_MS", std::string("5000"));
     const ScopedEnvVar enabledOverride("REDIS_ENABLED", std::string("false"));
 
-    const auto path = writeTempConfig({{"redis", {{"host", "127.0.0.1"}, {"enabled", true}}}});
+    const TempConfigFile configFile(
+        {{"redis", {{"host", "127.0.0.1"}, {"enabled", true}}}});
 
-    const auto config = backend::loadConfig(path.string());
+    const auto config = backend::loadConfig(configFile.path().string());
     const auto& redis = config.at("redis");
 
     EXPECT_EQ(redis.at("host").get<std::string>(), "cache.internal");
@@ -142,6 +156,4 @@ TEST(BackendConfig, LoadConfigAppliesRedisEnvOverrides) {
     EXPECT_EQ(redis.at("lease_key_prefix").get<std::string>(), "override:lease:");
     EXPECT_EQ(redis.at("socket_timeout_ms").get<int>(), 5000);
     EXPECT_FALSE(redis.at("enabled").get<bool>());
-
-    std::filesystem::remove(path);
 }

@@ -10,8 +10,10 @@
 
 #include "Backend.h"
 #include "database/db_manager.h"
+#include "services/cache_client.h"
 #include "services/image_service.h"
 #include "services/minio_client.h"
+#include "services/null_cache_client.h"
 #include "services/redis_client.h"
 
 int main() {
@@ -52,6 +54,24 @@ int main() {
         } catch (const std::exception& e) {
             spdlog::warn("Redis init failed: {} - falling back to polling", e.what());
         }
+
+        // --- Cache initialization ---
+        // TODO(cache PR2): inject into ImageService and remove [[maybe_unused]].
+        [[maybe_unused]] std::shared_ptr<cache::ICacheClient> cacheClient =
+            std::make_shared<cache::NullCacheClient>();
+        try {
+            if (config.contains("cache") && config.at("cache").is_object()) {
+                auto cacheConfig = parseCacheConfig(config.at("cache"));
+                if (cacheConfig.enabled) {
+                    cacheClient = std::make_shared<cache::RedisCacheClient>(cacheConfig);
+                }
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("Cache init failed: {} - falling back to no cache", e.what());
+            cacheClient = std::make_shared<cache::NullCacheClient>();
+        }
+
+        // --- Database initialization ---
 
         const auto mysqlConfig = database::parseMysqlConfig(dbConfig);
 

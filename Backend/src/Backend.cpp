@@ -179,6 +179,11 @@ void applyEnvOverrides(nlohmann::json& config) {
         redis = nlohmann::json::object();
     }
 
+    auto& cache = config["cache"];
+    if (!cache.is_object()) {
+        cache = nlohmann::json::object();
+    }
+
     overrideString(redis, "host", "REDIS_HOST");
     overrideInt(redis, "port", "REDIS_PORT");
     overrideString(redis, "password", "REDIS_PASSWORD");
@@ -189,6 +194,17 @@ void applyEnvOverrides(nlohmann::json& config) {
     overrideString(redis, "task_queue_key", "REDIS_TASK_QUEUE_KEY");
     overrideString(redis, "lease_key_prefix", "REDIS_LEASE_KEY_PREFIX");
     overrideBool(redis, "enabled", "REDIS_ENABLED");
+
+    overrideString(cache, "host", "CACHE_HOST");
+    overrideInt(cache, "port", "CACHE_PORT");
+    overrideString(cache, "password", "CACHE_PASSWORD");
+    overrideInt(cache, "db", "CACHE_DB");
+    overrideInt(cache, "pool_size", "CACHE_POOL_SIZE");
+    overrideInt(cache, "connect_timeout_ms", "CACHE_CONNECT_TIMEOUT_MS");
+    overrideInt(cache, "socket_timeout_ms", "CACHE_SOCKET_TIMEOUT_MS");
+    overrideString(cache, "key_prefix", "CACHE_KEY_PREFIX");
+    overrideInt(cache, "version_key_ttl_seconds", "CACHE_VERSION_KEY_TTL_SECONDS");
+    overrideBool(cache, "enabled", "CACHE_ENABLED");
 
     overrideString(server, "host", "BACKEND_HOST");
     overrideInt(server, "port", "BACKEND_PORT");
