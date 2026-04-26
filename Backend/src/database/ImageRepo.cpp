@@ -20,8 +20,11 @@ constexpr const char* kColumns =
     "id, user_id, request_id, prompt, negative_prompt, num_steps, "
     "height, width, seed, status, retry_count, max_retries, failure_code, "
     "worker_id, image_url, thumbnail_url, storage_key, error_message, "
-    "generation_time, created_at, started_at, completed_at, cancelled_at, "
-    "lease_expires_at";
+    "generation_time, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at, "
+    "DATE_FORMAT(started_at, '%Y-%m-%d %H:%i:%s') AS started_at, "
+    "DATE_FORMAT(completed_at, '%Y-%m-%d %H:%i:%s') AS completed_at, "
+    "DATE_FORMAT(cancelled_at, '%Y-%m-%d %H:%i:%s') AS cancelled_at, "
+    "DATE_FORMAT(lease_expires_at, '%Y-%m-%d %H:%i:%s') AS lease_expires_at";
 
 constexpr int kColumnCount = 24;
 
@@ -86,7 +89,6 @@ double getDoubleOrDefault(const mysqlx::Row& row, int index, double fallback) {
     }
     return row[index].get<double>();
 }
-
 
 models::ImageGeneration rowToImageGeneration(const mysqlx::Row& row) {
     models::ImageGeneration image;
@@ -502,27 +504,41 @@ std::vector<int64_t> ImageRepo::findQueuedTaskIds() {
     return ids;
 }
 
-std::vector<int64_t> ImageRepo::expireLeasesReturningIds() {
+std::vector<ExpiredLease> ImageRepo::expireLeasesReturningExpired() {
     ensureTable();
     const auto nowText = utils::chrono::toDbString(std::chrono::system_clock::now());
 
-    // 先查出可重试的 ID
+    // Capture affected IDs before updating so callers can evict cache entries
+    // and requeue retryable tasks after the state transition.
     auto selectRequeue = database::DBManager::threadSession()
-                             .sql("SELECT id FROM " + imageTableName() +
+                             .sql("SELECT id, user_id FROM " + imageTableName() +
                                   " WHERE status = 'generating' AND lease_expires_at IS NOT NULL"
                                   "   AND lease_expires_at < ? AND retry_count < max_retries")
                              .bind(nowText)
                              .execute();
 
-    std::vector<int64_t> requeuedIds;
+    std::vector<ExpiredLease> expired;
     while (auto row = selectRequeue.fetchOne()) {
-        requeuedIds.push_back(static_cast<int64_t>(row[0].get<uint64_t>()));
+        expired.push_back({static_cast<int64_t>(row[0].get<uint64_t>()),
+                           static_cast<int64_t>(row[1].get<uint64_t>()), true});
+    }
+
+    auto selectTimeout = database::DBManager::threadSession()
+                             .sql("SELECT id, user_id FROM " + imageTableName() +
+                                  " WHERE status = 'generating' AND lease_expires_at IS NOT NULL"
+                                  "   AND lease_expires_at < ? AND retry_count >= max_retries")
+                             .bind(nowText)
+                             .execute();
+
+    while (auto row = selectTimeout.fetchOne()) {
+        expired.push_back({static_cast<int64_t>(row[0].get<uint64_t>()),
+                           static_cast<int64_t>(row[1].get<uint64_t>()), false});
     }
 
     // 执行原有的 expireLeases 逻辑
     expireLeases();
 
-    return requeuedIds;
+    return expired;
 }
 
 bool ImageRepo::renewLease(int64_t id, int64_t userId, const std::string& workerId,
@@ -555,11 +571,12 @@ bool ImageRepo::finishClaimedTask(const models::ImageGeneration& generation) {
                  " failure_code = ?, thumbnail_url = ?, storage_key = ?, lease_expires_at = NULL, "
                  "worker_id = NULL "
                  " WHERE id = ? AND user_id = ? AND status = 'generating' AND worker_id = ?")
-            .bind(
-                models::statusToStdString(generation.status), generation.image_url, generation.error_message,
-                generation.generation_time, optionalTimeToValue(generation.completed_at),
-                optionalTimeToValue(generation.cancelled_at), generation.failure_code,
-                generation.thumbnail_url, generation.storage_key, generation.id, generation.user_id)
+            .bind(models::statusToStdString(generation.status), generation.image_url,
+                  generation.error_message, generation.generation_time,
+                  optionalTimeToValue(generation.completed_at),
+                  optionalTimeToValue(generation.cancelled_at), generation.failure_code,
+                  generation.thumbnail_url, generation.storage_key, generation.id,
+                  generation.user_id)
             .bind(generation.worker_id)
             .execute();
 

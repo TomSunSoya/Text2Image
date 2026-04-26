@@ -17,8 +17,8 @@ class ImageRepo : public IImageRepo {
     ImagePageResult findByUserIdAndStatus(int64_t userId, models::TaskStatus status, int page,
                                           int size) override;
 
-    [[nodiscard]] std::optional<models::ImageGeneration>
-    findByIdAndUserId(int64_t id, int64_t userId) override;
+    [[nodiscard]] std::optional<models::ImageGeneration> findByIdAndUserId(int64_t id,
+                                                                           int64_t userId) override;
     bool deleteByIdAndUserId(int64_t id, int64_t userId) override;
 
     [[nodiscard]] std::optional<models::ImageGeneration>
@@ -28,7 +28,7 @@ class ImageRepo : public IImageRepo {
     [[nodiscard]] std::optional<models::ImageGeneration>
     claimTaskById(int64_t taskId, const std::string& workerId, long leaseSeconds);
     std::vector<int64_t> findQueuedTaskIds();
-    std::vector<int64_t> expireLeasesReturningIds();
+    std::vector<ExpiredLease> expireLeasesReturningExpired() override;
     [[nodiscard]] bool renewLease(int64_t id, int64_t userId, const std::string& workerId,
                                   long leaseSeconds);
 

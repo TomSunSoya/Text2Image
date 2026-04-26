@@ -56,8 +56,7 @@ int main() {
         }
 
         // --- Cache initialization ---
-        // TODO(cache PR2): inject into ImageService and remove [[maybe_unused]].
-        [[maybe_unused]] std::shared_ptr<cache::ICacheClient> cacheClient =
+        std::shared_ptr<cache::ICacheClient> cacheClient =
             std::make_shared<cache::NullCacheClient>();
         try {
             if (config.contains("cache") && config.at("cache").is_object()) {
@@ -70,6 +69,7 @@ int main() {
             spdlog::warn("Cache init failed: {} - falling back to no cache", e.what());
             cacheClient = std::make_shared<cache::NullCacheClient>();
         }
+        ImageService::setDefaultCache(cacheClient);
 
         // --- Database initialization ---
 
@@ -77,7 +77,7 @@ int main() {
 
         try {
             database::DBManager::init(mysqlConfig);
-            ImageService::bootstrapWorkers();
+            ImageService::bootstrapWorkers(cacheClient);
             spdlog::info("Database initialized: {}:{}", mysqlConfig.host, mysqlConfig.port);
         } catch (const std::exception& e) {
             spdlog::warn("Database initialization failed: {}", e.what());

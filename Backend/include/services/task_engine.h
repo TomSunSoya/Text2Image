@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "services/cache_client.h"
 class TaskEngine {
   public:
     TaskEngine();
@@ -13,7 +14,7 @@ class TaskEngine {
     TaskEngine(TaskEngine&&) = delete;
     TaskEngine& operator=(TaskEngine&&) = delete;
 
-    void bootstrap();
+    void bootstrap(std::shared_ptr<cache::ICacheClient> cache = nullptr);
     void enqueue(int64_t taskId);
 
   private:

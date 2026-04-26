@@ -9,6 +9,7 @@
 
 #include "database/i_image_repo.h"
 #include "models/i_image_storage.h"
+#include "services/cache_client.h"
 #include "services/generation_client.h"
 #include "services/image_service_types.h"
 #include "services/service_error.h"
@@ -17,8 +18,11 @@ class ImageService {
   public:
     ImageService();
     ImageService(std::shared_ptr<IImageRepo> repo, std::shared_ptr<IImageStorage> storage);
+    ImageService(std::shared_ptr<IImageRepo> repo, std::shared_ptr<IImageStorage> storage,
+                 std::shared_ptr<cache::ICacheClient> cache);
 
-    static void bootstrapWorkers();
+    static void bootstrapWorkers(std::shared_ptr<cache::ICacheClient> cache = nullptr);
+    static void setDefaultCache(std::shared_ptr<cache::ICacheClient> cache);
 
     [[nodiscard]] std::expected<ImageCreateResult, ServiceError>
     create(int64_t userId, const nlohmann::json& payload) const;
@@ -44,5 +48,9 @@ class ImageService {
   private:
     std::shared_ptr<IImageRepo> repo_;
     std::shared_ptr<IImageStorage> storage_;
+    std::shared_ptr<cache::ICacheClient> cache_;
     GenerationClient generation_client_;
+
+    void writeToCache(const std::string& key, const models::ImageGeneration& image) const;
+    void presignInPlace(models::ImageGeneration& image) const;
 };

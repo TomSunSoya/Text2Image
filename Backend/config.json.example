@@ -39,7 +39,7 @@
   "minio": {
     "endpoint": "http://127.0.0.1:9000",
     "access_key": "minioadmin",
-    "secret_key": "minioadmin",
+    "secret_key": "CHANGE_ME_MINIO_PASSWORD",
     "bucket": "zimage",
     "region": "us-east-1",
     "presign_expiry_seconds": 3600

@@ -44,6 +44,10 @@ class FakeImageRepo : public IImageRepo {
     bool retryByIdAndUserId(int64_t, int64_t, models::ImageGeneration*) override {
         return false;
     }
+
+    std::vector<ExpiredLease> expireLeasesReturningExpired() override {
+        return {};
+    }
 };
 
 class FakeImageStorage : public IImageStorage {

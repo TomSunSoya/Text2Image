@@ -32,7 +32,7 @@ Image generation currently works like this:
 4. workers call `POST /generate` on `ModelService`
 5. `ModelService` generates the image, stores it in MinIO, and returns result metadata
 6. backend persists task status, timing, storage metadata, and history
-7. frontend receives real-time status updates via WebSocket (`/api/ws/tasks`) and lazily loads the final image
+7. frontend receives real-time status updates via WebSocket (`/api/ws/images`) and lazily loads the final image
 
 ## 4. Current Capabilities
 
@@ -154,6 +154,23 @@ cmake --build out\build\x64-debug --config Debug
 cd ZImageFrontend
 npm install
 npm run dev
+```
+
+The Vite dev server proxies `/api` and `/health` to the backend. By default it uses
+`BACKEND_PORT` from the repository root `.env` and targets `http://127.0.0.1:<BACKEND_PORT>`.
+Use `ZImageFrontend/.env.local` or shell environment variables to override:
+
+```powershell
+$env:VITE_BACKEND_PROXY_TARGET = "http://127.0.0.1:8082"
+$env:VITE_HEALTH_PROXY_TARGET = "http://127.0.0.1:8082"
+npm run dev
+```
+
+When running the backend in Docker but the model service directly on Windows, set the backend
+model-service URL to the host gateway and recreate the backend container:
+
+```powershell
+PYTHON_SERVICE_URL=http://host.docker.internal:8081
 ```
 
 ### 6.4 VSCode Workflow

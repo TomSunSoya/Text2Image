@@ -15,7 +15,9 @@
 #include "database/ImageRepo.h"
 #include "models/image_storage.h"
 #include "models/task_status.h"
+#include "services/image_cache_key.h"
 #include "services/generation_client.h"
+#include "services/null_cache_client.h"
 #include "services/redis_client.h"
 #include "services/task_engine.h"
 #include "services/task_event_hub.h"
@@ -25,6 +27,11 @@ namespace {
 TaskEngine& taskEngine() {
     static TaskEngine engine;
     return engine;
+}
+
+std::shared_ptr<cache::ICacheClient>& defaultCacheClient() {
+    static std::shared_ptr<cache::ICacheClient> client = std::make_shared<cache::NullCacheClient>();
+    return client;
 }
 
 std::string buildRequestId() {
@@ -114,11 +121,41 @@ void presignListImages(const IImageStorage& storage, std::vector<models::ImageGe
 
 } // namespace
 
+void ImageService::writeToCache(const std::string& key,
+                                const models::ImageGeneration& image) const {
+    try {
+        auto sanitized = image;
+        sanitized.image_bytes.clear();
+        sanitized.image_url.clear();
+        const auto ttl = models::isTerminal(image.status) ? image_cache::ttl::kMetaTerminal
+                                                          : image_cache::ttl::kMetaInflight;
+        cache_->setex(key, sanitized.toJson().dump(), ttl);
+    } catch (const std::exception& ex) {
+        spdlog::warn("ImageService::writeToCache failed for key '{}': {}", key, ex.what());
+    }
+}
+
+void ImageService::presignInPlace(models::ImageGeneration& image) const {
+    try {
+        image.image_url = storage_->presignUrl(image.storage_key);
+    } catch (const std::exception& ex) {
+        spdlog::warn("ImageService::presignInPlace failed to generate presigned URL for id={}, "
+                     "user_id={}, reason={}",
+                     image.id, image.user_id, ex.what());
+    }
+}
+
 ImageService::ImageService()
-    : repo_(std::make_shared<ImageRepo>()), storage_(std::make_shared<ImageStorage>()) {}
+    : repo_(std::make_shared<ImageRepo>()), storage_(std::make_shared<ImageStorage>()),
+      cache_(defaultCacheClient()) {}
 
 ImageService::ImageService(std::shared_ptr<IImageRepo> repo, std::shared_ptr<IImageStorage> storage)
-    : repo_(std::move(repo)), storage_(std::move(storage)) {
+    : ImageService(std::move(repo), std::move(storage), defaultCacheClient()) {}
+
+ImageService::ImageService(std::shared_ptr<IImageRepo> repo, std::shared_ptr<IImageStorage> storage,
+                           std::shared_ptr<cache::ICacheClient> cache)
+    : repo_(std::move(repo)), storage_(std::move(storage)),
+      cache_(cache ? std::move(cache) : defaultCacheClient()) {
     if (!repo_) {
         throw std::invalid_argument("ImageService: repo must not be null");
     }
@@ -127,8 +164,12 @@ ImageService::ImageService(std::shared_ptr<IImageRepo> repo, std::shared_ptr<IIm
     }
 }
 
-void ImageService::bootstrapWorkers() {
-    taskEngine().bootstrap();
+void ImageService::bootstrapWorkers(std::shared_ptr<cache::ICacheClient> cache) {
+    taskEngine().bootstrap(cache);
+}
+
+void ImageService::setDefaultCache(std::shared_ptr<cache::ICacheClient> cache) {
+    defaultCacheClient() = cache ? std::move(cache) : std::make_shared<cache::NullCacheClient>();
 }
 
 std::expected<ImageCreateResult, ServiceError>
@@ -165,6 +206,7 @@ ImageService::create(int64_t userId, const nlohmann::json& payload) const {
 
         generation.id = repo_->insert(generation);
         TaskEventHub::instance().publishTaskUpdated(generation);
+        writeToCache(image_cache::metaKey(userId, generation.id), generation);
         taskEngine().enqueue(generation.id);
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::create persist error: {}", ex.what());
@@ -223,21 +265,44 @@ std::expected<ImageGetResult, ServiceError> ImageService::getById(int64_t userId
             ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
-    try {
-        auto image = repo_->findByIdAndUserId(id, userId);
-        if (!image) {
+    const auto key = image_cache::metaKey(userId, id);
+
+    // read from cache first
+    if (auto cached = cache_->get(key)) {
+        if (*cached == image_cache::kNullMarker) {
             return std::unexpected(
                 ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
         }
 
-        if (includeImagePayload && !image->storage_key.empty()) {
-            try {
-                image->image_url = storage_->presignUrl(image->storage_key);
-            } catch (const std::exception& ex) {
-                spdlog::warn("ImageService::getById failed to generate presigned URL, id={}, "
-                             "user_id={}, reason={}",
-                             id, userId, ex.what());
+        try {
+            auto image = models::ImageGeneration::fromJson(nlohmann::json::parse(*cached));
+            if (includeImagePayload && !image.storage_key.empty()) {
+                presignInPlace(image);
             }
+            return ImageGetResult{std::move(image)};
+        } catch (const std::exception& ex) {
+            spdlog::warn("ImageService::getById failed to parse cached value, key={}, reason={}; "
+                         "evicting and falling back to DB",
+                         key, ex.what());
+            cache_->del(key);
+            // fall through to load from DB
+        }
+    }
+
+    // load from DB if cache miss or cache error
+    try {
+        auto image = repo_->findByIdAndUserId(id, userId);
+        if (!image) {
+            cache_->setex(key, image_cache::kNullMarker,
+                          image_cache::ttl::kNullMarker); // cache null result
+            return std::unexpected(
+                ServiceError{drogon::k404NotFound, "image_not_found", "image not found"});
+        }
+
+        writeToCache(key, *image);
+
+        if (includeImagePayload && !image->storage_key.empty()) {
+            presignInPlace(*image);
         }
 
         return ImageGetResult{*image};
@@ -292,6 +357,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::cancelById(int64_t use
         }
 
         TaskEventHub::instance().publishTaskUpdated(updated);
+        cache_->del(image_cache::metaKey(userId, id)); // evict cache
         return ImageGetResult{updated};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::cancelById error: {}", ex.what());
@@ -330,6 +396,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::retryById(int64_t user
         }
 
         TaskEventHub::instance().publishTaskUpdated(updated);
+        cache_->del(image_cache::metaKey(userId, id)); // evict cache
         taskEngine().enqueue(id);
         return ImageGetResult{updated};
     } catch (const std::exception& ex) {
@@ -411,7 +478,7 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
                              id, current->storage_key, ex.what());
             }
         }
-
+        cache_->del(image_cache::metaKey(userId, id)); // evict cache
         return {};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::deleteById error: {}", ex.what());

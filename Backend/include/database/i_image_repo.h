@@ -12,6 +12,12 @@ struct ImagePageResult {
     int64_t total_elements{0};
 };
 
+struct ExpiredLease {
+    int64_t id{0};
+    int64_t user_id{0};
+    bool requeue{false};
+};
+
 class IImageRepo {
   public:
     virtual ~IImageRepo() = default;
@@ -34,4 +40,6 @@ class IImageRepo {
                                                    models::ImageGeneration* updated) = 0;
     [[nodiscard]] virtual bool retryByIdAndUserId(int64_t id, int64_t userId,
                                                   models::ImageGeneration* updated) = 0;
+
+    virtual std::vector<ExpiredLease> expireLeasesReturningExpired() = 0;
 };

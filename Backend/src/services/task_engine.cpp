@@ -8,6 +8,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <spdlog/spdlog.h>
@@ -17,6 +18,8 @@
 #include "services/generation_client.h"
 #include "services/redis_client.h"
 #include "services/task_event_hub.h"
+#include "services/null_cache_client.h"
+#include "services/image_cache_key.h"
 
 namespace {
 
@@ -63,6 +66,7 @@ std::chrono::seconds leaseRenewInterval(long leaseSeconds) {
 struct TaskEngine::Impl {
     TaskEngineConfig config{loadTaskEngineConfig()};
     GenerationClient generation_client;
+    std::shared_ptr<cache::ICacheClient> cache{std::make_shared<cache::NullCacheClient>()};
     std::vector<std::jthread> workers;
     std::once_flag start_once;
     std::mutex notify_mutex;
@@ -70,6 +74,10 @@ struct TaskEngine::Impl {
 
     void notifyWorkers() {
         notify_cv.notify_all();
+    }
+
+    void invalidate(int64_t userId, int64_t id) {
+        cache->del(image_cache::metaKey(userId, id));
     }
 
     void enqueue(int64_t taskId) {
@@ -149,6 +157,7 @@ struct TaskEngine::Impl {
 
     void processClaimedTask(ImageRepo& repo, models::ImageGeneration& task,
                             const std::string& workerId) {
+        invalidate(task.user_id, task.id); // evict cache immediately when worker picks up the task
         spdlog::info(
             "task worker claimed task id = {}, user_id = {}, request_id = {}, worker_id = {}",
             task.id, task.user_id, task.request_id, workerId);
@@ -171,6 +180,8 @@ struct TaskEngine::Impl {
             GenerationClient::cleanupOrphanedStoredImage(result);
             spdlog::warn("task worker failed to finish claimed task id = {}", task.id);
         } else {
+            invalidate(task.user_id,
+                       task.id); // evict cache again to ensure any mid-flight updates are cleared
             TaskEventHub::instance().publishTaskUpdated(result);
         }
     }
@@ -229,12 +240,17 @@ struct TaskEngine::Impl {
             }
 
             try {
-                auto recoveredIds = repo.expireLeasesReturningIds();
-                if (!recoveredIds.empty()) {
-                    spdlog::info("lease expiry scanner recovered {} task(s)", recoveredIds.size());
-                    for (auto id : recoveredIds) {
-                        enqueue(id);
+                auto expired = repo.expireLeasesReturningExpired();
+                size_t requeued = 0;
+                for (const auto& t : expired) {
+                    invalidate(t.user_id, t.id);
+                    if (t.requeue) {
+                        enqueue(t.id);
+                        ++requeued;
                     }
+                }
+                if (requeued > 0) {
+                    spdlog::info("lease expiry scanner recovered {} task(s)", requeued);
                 }
             } catch (const std::exception& ex) {
                 spdlog::error("lease expiry scanner error: {}", ex.what());
@@ -298,7 +314,9 @@ TaskEngine::TaskEngine() : impl_(std::make_unique<Impl>()) {}
 
 TaskEngine::~TaskEngine() = default;
 
-void TaskEngine::bootstrap() {
+void TaskEngine::bootstrap(std::shared_ptr<cache::ICacheClient> cache) {
+    if (cache)
+        impl_->cache = std::move(cache);
     impl_->bootstrap();
 }
 
