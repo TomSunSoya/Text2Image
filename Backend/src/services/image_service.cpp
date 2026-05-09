@@ -15,8 +15,8 @@
 #include "database/ImageRepo.h"
 #include "models/image_storage.h"
 #include "models/task_status.h"
-#include "services/image_cache_key.h"
 #include "services/generation_client.h"
+#include "services/image_cache_key.h"
 #include "services/null_cache_client.h"
 #include "services/redis_client.h"
 #include "services/task_engine.h"
@@ -145,6 +145,28 @@ void ImageService::presignInPlace(models::ImageGeneration& image) const {
     }
 }
 
+void ImageService::writeListCache(const std::string& key, const ImageListResult& result) const {
+    try {
+        nlohmann::json j;
+        j["total_elements"] = result.total_elements;
+        auto content = nlohmann::json::array();
+        for (const auto& img : result.content) {
+            auto sanitized = img;
+            sanitized.image_bytes.clear();
+            sanitized.image_url.clear();
+            content.push_back(sanitized.toJson());
+        }
+        j["content"] = std::move(content);
+        cache_->setex(key, j.dump(), image_cache::listTtlWithJitter());
+    } catch (const std::exception& ex) {
+        spdlog::warn("ImageService::writeListCache failed for key '{}': {}", key, ex.what());
+    }
+}
+
+void ImageService::invalidateListCacheFor(int64_t userId) const {
+    cache_->bumpVersion(image_cache::kListVersionNamespace, std::to_string(userId));
+}
+
 ImageService::ImageService()
     : repo_(std::make_shared<ImageRepo>()), storage_(std::make_shared<ImageStorage>()),
       cache_(defaultCacheClient()) {}
@@ -207,6 +229,8 @@ ImageService::create(int64_t userId, const nlohmann::json& payload) const {
         generation.id = repo_->insert(generation);
         TaskEventHub::instance().publishTaskUpdated(generation);
         writeToCache(image_cache::metaKey(userId, generation.id), generation);
+        invalidateListCacheFor(userId);
+
         taskEngine().enqueue(generation.id);
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::create persist error: {}", ex.what());
@@ -225,10 +249,44 @@ std::expected<ImageListResult, ServiceError> ImageService::listMy(int64_t userId
             ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
     }
 
+    const auto normalizedPage = image_cache::normalizePage(page);
+    const auto normalizedSize = image_cache::normalizeSize(size);
+
+    const auto userIdStr = std::to_string(userId);
+    const auto version = cache_->getVersion(image_cache::kListVersionNamespace, userIdStr);
+    const auto key = image_cache::listMyKey(userId, version, normalizedPage, normalizedSize);
+
+    // read from cache first
+    if (auto cached = cache_->get(key)) {
+        try {
+            auto parsed = nlohmann::json::parse(*cached);
+            ImageListResult result;
+            result.total_elements = parsed.value("total_elements", (int64_t)0);
+            for (const auto& item : parsed.value("content", nlohmann::json::array())) {
+                result.content.push_back(models::ImageGeneration::fromJson(item));
+            }
+
+            // presign URLs in place
+            presignListImages(*storage_, result.content);
+            return result;
+        } catch (const std::exception& ex) {
+            spdlog::warn("ImageService::listMy failed to parse cached value, key={}, reason={}; "
+                         "evicting and "
+                         "falling back to DB",
+                         key, ex.what());
+            cache_->del(key);
+            // no record in cache, fall through to load from DB
+        }
+    }
+
     try {
-        auto result = repo_->findByUserId(userId, page, size);
+        auto repoPage = repo_->findByUserId(userId, normalizedPage, normalizedSize);
+        ImageListResult result{std::move(repoPage.content), repoPage.total_elements};
+        // write to cache for next time
+        writeListCache(key, result);
+
         presignListImages(*storage_, result.content);
-        return ImageListResult{std::move(result.content), result.total_elements};
+        return result;
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::listMy error: {}", ex.what());
         return std::unexpected(ServiceError{drogon::k500InternalServerError,
@@ -245,11 +303,41 @@ ImageService::listMyByStatus(int64_t userId, const std::string& status, int page
     }
 
     const auto target = models::normalizeTaskStatus(status);
+    const auto normalizedPage = image_cache::normalizePage(page);
+    const auto normalizedSize = image_cache::normalizeSize(size);
+
+    const auto userIdStr = std::to_string(userId);
+    const auto version = cache_->getVersion(image_cache::kListVersionNamespace, userIdStr);
+    const auto key =
+        image_cache::listMyStatusKey(userId, version, target, normalizedPage, normalizedSize);
+
+    if (auto cached = cache_->get(key)) {
+        try {
+            auto parsed = nlohmann::json::parse(*cached);
+            ImageListResult result;
+            result.total_elements = parsed.value("total_elements", (int64_t)0);
+            for (const auto& item : parsed.value("content", nlohmann::json::array())) {
+                result.content.push_back(models::ImageGeneration::fromJson(item));
+            }
+
+            presignListImages(*storage_, result.content);
+            return result;
+        } catch (const std::exception& ex) {
+            spdlog::warn("ImageService::listMyByStatus failed to parse cached value, key={}, "
+                         "reason={}; evicting and falling back to DB",
+                         key, ex.what());
+            cache_->del(key);
+        }
+    }
 
     try {
-        auto result = repo_->findByUserIdAndStatus(userId, target, page, size);
+        auto repoPage =
+            repo_->findByUserIdAndStatus(userId, target, normalizedPage, normalizedSize);
+        ImageListResult result{std::move(repoPage.content), repoPage.total_elements};
+        writeListCache(key, result);
+
         presignListImages(*storage_, result.content);
-        return ImageListResult{std::move(result.content), result.total_elements};
+        return result;
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::listMyByStatus error: {}", ex.what());
         return std::unexpected(ServiceError{drogon::k500InternalServerError,
@@ -358,6 +446,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::cancelById(int64_t use
 
         TaskEventHub::instance().publishTaskUpdated(updated);
         cache_->del(image_cache::metaKey(userId, id)); // evict cache
+        invalidateListCacheFor(userId);
         return ImageGetResult{updated};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::cancelById error: {}", ex.what());
@@ -397,6 +486,8 @@ std::expected<ImageGetResult, ServiceError> ImageService::retryById(int64_t user
 
         TaskEventHub::instance().publishTaskUpdated(updated);
         cache_->del(image_cache::metaKey(userId, id)); // evict cache
+
+        invalidateListCacheFor(userId);
         taskEngine().enqueue(id);
         return ImageGetResult{updated};
     } catch (const std::exception& ex) {
@@ -479,6 +570,7 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
             }
         }
         cache_->del(image_cache::metaKey(userId, id)); // evict cache
+        invalidateListCacheFor(userId);
         return {};
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::deleteById error: {}", ex.what());

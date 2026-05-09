@@ -53,4 +53,6 @@ class ImageService {
 
     void writeToCache(const std::string& key, const models::ImageGeneration& image) const;
     void presignInPlace(models::ImageGeneration& image) const;
+    void writeListCache(const std::string& key, const ImageListResult& result) const;
+    void invalidateListCacheFor(int64_t userId) const;
 };

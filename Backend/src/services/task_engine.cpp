@@ -76,8 +76,9 @@ struct TaskEngine::Impl {
         notify_cv.notify_all();
     }
 
-    void invalidate(int64_t userId, int64_t id) {
+    void invalidateAllForTask(int64_t userId, int64_t id) {
         cache->del(image_cache::metaKey(userId, id));
+        cache->bumpVersion(image_cache::kListVersionNamespace, std::to_string(userId));
     }
 
     void enqueue(int64_t taskId) {
@@ -157,7 +158,8 @@ struct TaskEngine::Impl {
 
     void processClaimedTask(ImageRepo& repo, models::ImageGeneration& task,
                             const std::string& workerId) {
-        invalidate(task.user_id, task.id); // evict cache immediately when worker picks up the task
+        invalidateAllForTask(task.user_id,
+                             task.id); // evict cache immediately when worker picks up the task
         spdlog::info(
             "task worker claimed task id = {}, user_id = {}, request_id = {}, worker_id = {}",
             task.id, task.user_id, task.request_id, workerId);
@@ -180,8 +182,9 @@ struct TaskEngine::Impl {
             GenerationClient::cleanupOrphanedStoredImage(result);
             spdlog::warn("task worker failed to finish claimed task id = {}", task.id);
         } else {
-            invalidate(task.user_id,
-                       task.id); // evict cache again to ensure any mid-flight updates are cleared
+            invalidateAllForTask(
+                task.user_id,
+                task.id); // evict cache again to ensure any mid-flight updates are cleared
             TaskEventHub::instance().publishTaskUpdated(result);
         }
     }
@@ -243,7 +246,7 @@ struct TaskEngine::Impl {
                 auto expired = repo.expireLeasesReturningExpired();
                 size_t requeued = 0;
                 for (const auto& t : expired) {
-                    invalidate(t.user_id, t.id);
+                    invalidateAllForTask(t.user_id, t.id);
                     if (t.requeue) {
                         enqueue(t.id);
                         ++requeued;
