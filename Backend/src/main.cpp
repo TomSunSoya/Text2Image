@@ -15,6 +15,7 @@
 #include "services/minio_client.h"
 #include "services/null_cache_client.h"
 #include "services/redis_client.h"
+#include "services/image_cache_key.h"
 
 int main() {
     try {
@@ -86,6 +87,9 @@ int main() {
         // --- MinIO initialization ---
         try {
             const auto& minioConfig = config.at("minio");
+            const int presignExpiry = minioConfig.value("presign_expiry_seconds", 3600);
+            ImageService::setPresignTtl(
+                image_cache::derivePresignTtl(std::chrono::seconds(presignExpiry)));
             MinioClient::Config minioCfg;
             minioCfg.endpoint = minioConfig.value("endpoint", std::string("http://localhost:9000"));
             minioCfg.access_key = minioConfig.value("access_key", std::string());

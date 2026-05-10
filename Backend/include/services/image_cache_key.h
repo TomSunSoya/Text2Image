@@ -1,10 +1,11 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
-#include <string>
-#include <string_view>
 #include <format>
 #include <random>
+#include <string>
+#include <string_view>
 
 #include "models/task_status.h"
 
@@ -12,6 +13,7 @@ namespace image_cache {
 
 constexpr std::string_view kNullMarker = "__NULL__";
 constexpr std::string_view kListVersionNamespace = "img:list";
+constexpr double kPresignCacheTtlRatio = 0.8;
 
 namespace ttl {
 constexpr std::chrono::seconds kMetaTerminal{300};
@@ -45,9 +47,21 @@ inline int normalizeSize(int s) noexcept {
 
 inline std::chrono::seconds listTtlWithJitter() {
     thread_local std::mt19937_64 rng{std::random_device{}()};
-    std::uniform_int_distribution<std::chrono::seconds::rep> dist(0,
-                                                                  ttl::kListJitterMax.count());
+    std::uniform_int_distribution<std::chrono::seconds::rep> dist(0, ttl::kListJitterMax.count());
     return ttl::kListBase + std::chrono::seconds(dist(rng));
 }
 
+inline std::string presignKey(std::string_view storageKey) {
+    return std::format("img:url:{}", storageKey);
+}
+
+inline std::chrono::seconds derivePresignTtl(std::chrono::seconds minioExpiry) {
+    if (minioExpiry <= std::chrono::seconds(0)) {
+        return std::chrono::seconds(0);
+    }
+
+    const auto seconds = static_cast<std::chrono::seconds::rep>(
+        static_cast<double>(minioExpiry.count()) * kPresignCacheTtlRatio);
+    return std::chrono::seconds{(std::max)(std::chrono::seconds::rep{1}, seconds)};
+}
 } // namespace image_cache

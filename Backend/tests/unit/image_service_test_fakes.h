@@ -248,6 +248,7 @@ class FakeImageStorage : public IImageStorage {
   public:
     mutable std::vector<std::string> presigned_keys;
     mutable std::vector<std::string> removed_keys;
+    bool return_empty_presigned_url{false};
 
     std::optional<std::string> getBytes(const std::string&) const override {
         return std::nullopt;
@@ -255,6 +256,9 @@ class FakeImageStorage : public IImageStorage {
 
     std::string presignUrl(const std::string& storageKey, int) const override {
         presigned_keys.push_back(storageKey);
+        if (return_empty_presigned_url) {
+            return {};
+        }
         return "signed://" + storageKey;
     }
 

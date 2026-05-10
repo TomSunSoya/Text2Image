@@ -105,11 +105,18 @@ std::optional<ServiceError> validateGenerationParams(models::ImageGeneration& ge
     return std::nullopt;
 }
 
-void presignListImages(const IImageStorage& storage, std::vector<models::ImageGeneration>& images) {
+std::chrono::seconds& presignTtlRef() {
+    static std::chrono::seconds ttl{0};
+    return ttl;
+}
+
+} // namespace
+
+void ImageService::presignListImagesInPlace(std::vector<models::ImageGeneration>& images) const {
     for (auto& img :
          images | std::views::filter([](const auto& i) { return !i.storage_key.empty(); })) {
         try {
-            img.image_url = storage.presignUrl(img.storage_key);
+            img.image_url = presignWithCache(img.storage_key);
         } catch (const std::exception& ex) {
             spdlog::error("presignListImages: failed to presign storage_key='{}': {}",
                           img.storage_key, ex.what());
@@ -118,8 +125,6 @@ void presignListImages(const IImageStorage& storage, std::vector<models::ImageGe
         }
     }
 }
-
-} // namespace
 
 void ImageService::writeToCache(const std::string& key,
                                 const models::ImageGeneration& image) const {
@@ -137,7 +142,7 @@ void ImageService::writeToCache(const std::string& key,
 
 void ImageService::presignInPlace(models::ImageGeneration& image) const {
     try {
-        image.image_url = storage_->presignUrl(image.storage_key);
+        image.image_url = presignWithCache(image.storage_key);
     } catch (const std::exception& ex) {
         spdlog::warn("ImageService::presignInPlace failed to generate presigned URL for id={}, "
                      "user_id={}, reason={}",
@@ -167,6 +172,29 @@ void ImageService::invalidateListCacheFor(int64_t userId) const {
     cache_->bumpVersion(image_cache::kListVersionNamespace, std::to_string(userId));
 }
 
+std::string ImageService::presignWithCache(const std::string& storageKey) const {
+    if (storageKey.empty()) {
+        return {};
+    }
+
+    const auto ttl = presignTtlRef();
+    if (ttl <= std::chrono::seconds{0}) {
+        // no caching, directly presign from storage
+        return storage_->presignUrl(storageKey);
+    }
+
+    const auto key = image_cache::presignKey(storageKey);
+    if (auto cached = cache_->get(key)) {
+        return std::move(*cached);
+    }
+
+    // not in cache, presign and write to cache
+    auto url = storage_->presignUrl(storageKey);
+    if (!url.empty())
+        cache_->setex(key, url, ttl);
+    return url;
+}
+
 ImageService::ImageService()
     : repo_(std::make_shared<ImageRepo>()), storage_(std::make_shared<ImageStorage>()),
       cache_(defaultCacheClient()) {}
@@ -192,6 +220,10 @@ void ImageService::bootstrapWorkers(std::shared_ptr<cache::ICacheClient> cache) 
 
 void ImageService::setDefaultCache(std::shared_ptr<cache::ICacheClient> cache) {
     defaultCacheClient() = cache ? std::move(cache) : std::make_shared<cache::NullCacheClient>();
+}
+
+void ImageService::setPresignTtl(std::chrono::seconds ttl) {
+    presignTtlRef() = ttl;
 }
 
 std::expected<ImageCreateResult, ServiceError>
@@ -267,7 +299,7 @@ std::expected<ImageListResult, ServiceError> ImageService::listMy(int64_t userId
             }
 
             // presign URLs in place
-            presignListImages(*storage_, result.content);
+            presignListImagesInPlace(result.content);
             return result;
         } catch (const std::exception& ex) {
             spdlog::warn("ImageService::listMy failed to parse cached value, key={}, reason={}; "
@@ -285,7 +317,7 @@ std::expected<ImageListResult, ServiceError> ImageService::listMy(int64_t userId
         // write to cache for next time
         writeListCache(key, result);
 
-        presignListImages(*storage_, result.content);
+        presignListImagesInPlace(result.content);
         return result;
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::listMy error: {}", ex.what());
@@ -320,7 +352,7 @@ ImageService::listMyByStatus(int64_t userId, const std::string& status, int page
                 result.content.push_back(models::ImageGeneration::fromJson(item));
             }
 
-            presignListImages(*storage_, result.content);
+            presignListImagesInPlace(result.content);
             return result;
         } catch (const std::exception& ex) {
             spdlog::warn("ImageService::listMyByStatus failed to parse cached value, key={}, "
@@ -336,7 +368,7 @@ ImageService::listMyByStatus(int64_t userId, const std::string& status, int page
         ImageListResult result{std::move(repoPage.content), repoPage.total_elements};
         writeListCache(key, result);
 
-        presignListImages(*storage_, result.content);
+        presignListImagesInPlace(result.content);
         return result;
     } catch (const std::exception& ex) {
         spdlog::error("ImageService::listMyByStatus error: {}", ex.what());
@@ -570,6 +602,9 @@ std::expected<void, ServiceError> ImageService::deleteById(int64_t userId, int64
             }
         }
         cache_->del(image_cache::metaKey(userId, id)); // evict cache
+        if (!current->storage_key.empty()) {
+            cache_->del(image_cache::presignKey(current->storage_key)); // evict presign cache
+        }
         invalidateListCacheFor(userId);
         return {};
     } catch (const std::exception& ex) {

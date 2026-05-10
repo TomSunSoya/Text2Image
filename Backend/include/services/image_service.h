@@ -1,9 +1,11 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -23,6 +25,7 @@ class ImageService {
 
     static void bootstrapWorkers(std::shared_ptr<cache::ICacheClient> cache = nullptr);
     static void setDefaultCache(std::shared_ptr<cache::ICacheClient> cache);
+    static void setPresignTtl(std::chrono::seconds ttl);
 
     [[nodiscard]] std::expected<ImageCreateResult, ServiceError>
     create(int64_t userId, const nlohmann::json& payload) const;
@@ -55,4 +58,6 @@ class ImageService {
     void presignInPlace(models::ImageGeneration& image) const;
     void writeListCache(const std::string& key, const ImageListResult& result) const;
     void invalidateListCacheFor(int64_t userId) const;
+    [[nodiscard]] std::string presignWithCache(const std::string& storageKey) const;
+    void presignListImagesInPlace(std::vector<models::ImageGeneration>& images) const;
 };
