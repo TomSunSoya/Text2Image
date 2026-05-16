@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   email VARCHAR(255) NOT NULL,
   password VARCHAR(255) NOT NULL,
   nickname VARCHAR(128) NOT NULL DEFAULT '',
+  role VARCHAR(32) NOT NULL DEFAULT 'user',
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -56,7 +57,8 @@ INSERT INTO schema_migrations (version)
 VALUES
   ('001_initial_schema'),
   ('002_image_generation_task_queue'),
-  ('003_add_image_base64')
+  ('003_add_image_base64'),
+  ('004_add_user_role')
 -- Keep this baseline list in sync with init-db/migrations/ so fresh installs
 -- record every migration that is already folded into this latest schema.
 ON DUPLICATE KEY UPDATE applied_at = applied_at;

@@ -2,11 +2,8 @@
 #include <regex>
 
 nlohmann::json models::User::toJson() const {
-    return {{"id", id},
-            {"username", username},
-            {"email", email},
-            {"nickname", nickname},
-            {"enabled", enabled}};
+    return {{"id", id},     {"username", username}, {"email", email}, {"nickname", nickname},
+            {"role", role}, {"enabled", enabled}};
 }
 
 models::User models::User::fromJson(const nlohmann::json& j) {
@@ -21,6 +18,8 @@ models::User models::User::fromJson(const nlohmann::json& j) {
         user.email = j["email"].get<std::string>();
     if (j.contains("nickname"))
         user.nickname = j["nickname"].get<std::string>();
+    if (j.contains("role"))
+        user.role = j["role"].get<std::string>();
     if (j.contains("enabled"))
         user.enabled = j["enabled"].get<bool>();
     return user;

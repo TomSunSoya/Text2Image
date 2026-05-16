@@ -9,6 +9,7 @@ static models::User rowToUser(const mysqlx::Row& row) {
     user.email = row[2].get<std::string>();
     user.password = row[3].get<std::string>();
     user.nickname = row[4].get<std::string>();
+    user.role = row[5].get<std::string>();
     return user;
 }
 
@@ -18,7 +19,7 @@ static mysqlx::Table usersTable() {
 
 std::optional<models::User> UserRepo::findByUsername(const std::string& username) {
     auto res = usersTable()
-                   .select("id", "username", "email", "password", "nickname")
+                   .select("id", "username", "email", "password", "nickname", "role")
                    .where("username = :u")
                    .bind("u", username)
                    .execute();
@@ -31,7 +32,7 @@ std::optional<models::User> UserRepo::findByUsername(const std::string& username
 
 std::optional<models::User> UserRepo::findByEmail(const std::string& email) {
     auto res = usersTable()
-                   .select("id", "username", "email", "password", "nickname")
+                   .select("id", "username", "email", "password", "nickname", "role")
                    .where("email = :e")
                    .bind("e", email)
                    .execute();
@@ -44,7 +45,7 @@ std::optional<models::User> UserRepo::findByEmail(const std::string& email) {
 
 std::optional<models::User> UserRepo::findById(int64_t id) {
     auto res = usersTable()
-                   .select("id", "username", "email", "password", "nickname")
+                   .select("id", "username", "email", "password", "nickname", "role")
                    .where("id = :id")
                    .bind("id", id)
                    .execute();
@@ -57,7 +58,7 @@ std::optional<models::User> UserRepo::findById(int64_t id) {
 
 bool UserRepo::existsByUsername(const std::string& username) {
     auto res = usersTable()
-                   .select("id", "username", "email", "password", "nickname")
+                   .select("id", "username", "email", "password", "nickname", "role")
                    .where("username = :u")
                    .bind("u", username)
                    .execute();
@@ -67,7 +68,7 @@ bool UserRepo::existsByUsername(const std::string& username) {
 
 bool UserRepo::existsByEmail(const std::string& email) {
     auto res = usersTable()
-                   .select("id", "username", "email", "password", "nickname")
+                   .select("id", "username", "email", "password", "nickname", "role")
                    .where("email = :e")
                    .bind("e", email)
                    .execute();
@@ -77,8 +78,8 @@ bool UserRepo::existsByEmail(const std::string& email) {
 
 int64_t UserRepo::insert(const models::User& user) {
     auto res = usersTable()
-                   .insert("username", "email", "password", "nickname")
-                   .values(user.username, user.email, user.password, user.nickname)
+                   .insert("username", "email", "password", "nickname", "role")
+                   .values(user.username, user.email, user.password, user.nickname, user.role)
                    .execute();
     return static_cast<int64_t>(res.getAutoIncrementValue());
 }

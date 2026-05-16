@@ -11,6 +11,7 @@
           <el-menu :default-active="activeTab" mode="horizontal" @select="handleTabChange">
             <el-menu-item index="generator">生成图像</el-menu-item>
             <el-menu-item index="history">我的作品</el-menu-item>
+            <el-menu-item v-if="authStore.isAdmin" index="metrics">缓存指标</el-menu-item>
           </el-menu>
 
           <!-- 用户信息 -->
@@ -44,6 +45,7 @@
     <main class="main-content">
       <ImageGenerator v-if="activeTab === 'generator'" />
       <ImageHistory v-if="activeTab === 'history'" />
+      <CacheMetricsPanel v-if="activeTab === 'metrics' && authStore.isAdmin" />
     </main>
 
     <footer class="footer">
@@ -53,17 +55,23 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { useAuthStore } from '@/stores/auth';
 import { Picture, Avatar, ArrowDown, SwitchButton } from '@element-plus/icons-vue';
 import { ElMessageBox } from 'element-plus';
 import ImageGenerator from '@/components/ImageGenerator.vue';
 import ImageHistory from '@/components/ImageHistory.vue';
+import CacheMetricsPanel from '@/components/CacheMetricsPanel.vue';
 
 const authStore = useAuthStore();
 const activeTab = ref('generator');
 
 const handleTabChange = (key) => {
+  if (key === 'metrics' && !authStore.isAdmin) {
+    activeTab.value = 'generator';
+    return;
+  }
+
   activeTab.value = key;
 };
 
@@ -87,6 +95,15 @@ onMounted(() => {
   // 检查登录状态
   authStore.checkAuth();
 });
+
+watch(
+  () => authStore.isAdmin,
+  (isAdmin) => {
+    if (!isAdmin && activeTab.value === 'metrics') {
+      activeTab.value = 'generator';
+    }
+  }
+);
 </script>
 
 <style scoped>

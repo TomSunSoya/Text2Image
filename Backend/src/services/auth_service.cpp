@@ -23,6 +23,7 @@ AuthService::registerUser(const nlohmann::json& payload) const {
             ServiceError{drogon::k409Conflict, "email_exists", "email already exists"});
     }
 
+    user.role = "user";
     user.password = security::hashPassword(user.password);
     user.id = repo.insert(user);
     return RegisterResult{user};
@@ -52,5 +53,5 @@ std::expected<LoginResult, ServiceError> AuthService::login(const nlohmann::json
                                             "invalid username or password"});
     }
 
-    return LoginResult{*user, utils::createToken(user->id, user->username)};
+    return LoginResult{*user, utils::createToken(user->id, user->username, user->role)};
 }

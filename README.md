@@ -41,6 +41,17 @@ Image generation currently works like this:
 - register: `POST /api/auth/register`
 - login: `POST /api/auth/login`
 - authenticated image APIs use Bearer token
+- users have a `role` field; regular registration always creates `user`, while admin-only
+  surfaces require `role = 'admin'`
+
+To promote an initial administrator after the user exists, run:
+
+```sql
+UPDATE users SET role = 'admin' WHERE username = '<your_username>';
+```
+
+The promoted user must log in again so the frontend receives a JWT and user payload with the
+updated `admin` role.
 
 ### 4.2 Image Tasks
 
@@ -69,6 +80,7 @@ Canonical task statuses currently used across the stack:
 - backend liveness: `GET /health`
 - backend proxy model health: `GET /api/images/health`
 - model service health: `GET http://<model-service-host>:8081/health`
+- admin cache metrics: `GET /api/metrics/cache`
 
 `ModelService` health now distinguishes:
 
@@ -311,7 +323,7 @@ Versioned database migrations now live under `init-db/migrations/`:
 
 Operational notes:
 
-- fresh `docker compose up` runs `init-db/01-schema.sql` and records `001` + `002` + `003` in `schema_migrations`
+- fresh `docker compose up` runs `init-db/01-schema.sql` and records `001` + `002` + `003` + `004` in `schema_migrations`
 - the backend still keeps its existing startup-time defensive column/index checks for `image_generations`, but versioned migrations are now the primary upgrade path
 - existing databases should be upgraded with `docker compose --profile ops run --rm db-migrate`
 - when adding a new migration file, also fold that change into `init-db/01-schema.sql` and append the new version to its baseline `schema_migrations` insert for fresh installs

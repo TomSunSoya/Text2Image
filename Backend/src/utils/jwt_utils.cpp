@@ -33,11 +33,12 @@ std::string loadIssuer() {
 
 namespace utils {
 
-std::string createToken(int64_t userId, const std::string& username) {
+std::string createToken(int64_t userId, const std::string& username, const std::string& role) {
     return jwt::create<jwt::default_clock, traits>(jwt::default_clock{})
         .set_issuer(loadIssuer())
         .set_payload_claim("uid", traits::value_type(static_cast<traits::integer_type>(userId)))
         .set_payload_claim("username", traits::value_type(username))
+        .set_payload_claim("role", traits::value_type(role.empty() ? "user" : role))
         .sign(jwt::algorithm::hs256{loadSecret()});
 }
 
@@ -61,6 +62,12 @@ std::optional<JwtPayload> verifyToken(const std::string& token) {
             payload.user_id = static_cast<int64_t>(uidClaim.as_number());
         }
         payload.username = decoded.get_payload_claim("username").as_string();
+        if (decoded.has_payload_claim("role")) {
+            payload.role = decoded.get_payload_claim("role").as_string();
+            if (payload.role.empty()) {
+                payload.role = "user";
+            }
+        }
         return payload;
     } catch (...) {
         return std::nullopt;

@@ -1,5 +1,25 @@
 #include <gtest/gtest.h>
+
+#include <jwt-cpp/jwt.h>
+#include <jwt-cpp/traits/nlohmann-json/traits.h>
+
+#include "Backend.h"
 #include "utils/jwt_utils.h"
+
+namespace {
+using JwtTraits = jwt::traits::nlohmann_json;
+
+std::string createLegacyTokenWithoutRole(int64_t userId, const std::string& username) {
+    const auto& secret =
+        backend::cachedConfig().at("jwt").at("secret").get_ref<const std::string&>();
+    return jwt::create<jwt::default_clock, JwtTraits>(jwt::default_clock{})
+        .set_issuer("backend")
+        .set_payload_claim("uid",
+                           JwtTraits::value_type(static_cast<JwtTraits::integer_type>(userId)))
+        .set_payload_claim("username", JwtTraits::value_type(username))
+        .sign(jwt::algorithm::hs256{secret});
+}
+} // namespace
 
 TEST(JWT, CreateAndVerifyRoundTrip) {
     auto token = utils::createToken(42, "testuser");
@@ -9,6 +29,28 @@ TEST(JWT, CreateAndVerifyRoundTrip) {
     ASSERT_TRUE(payload.has_value());
     EXPECT_EQ(payload->user_id, 42);
     EXPECT_EQ(payload->username, "testuser");
+    EXPECT_EQ(payload->role, "user");
+}
+
+TEST(JWT, CreateAndVerifyAdminRoleRoundTrip) {
+    auto token = utils::createToken(42, "adminuser", "admin");
+    EXPECT_FALSE(token.empty());
+
+    auto payload = utils::verifyToken(token);
+    ASSERT_TRUE(payload.has_value());
+    EXPECT_EQ(payload->user_id, 42);
+    EXPECT_EQ(payload->username, "adminuser");
+    EXPECT_EQ(payload->role, "admin");
+}
+
+TEST(JWT, MissingRoleDefaultsToUser) {
+    auto token = createLegacyTokenWithoutRole(42, "legacyuser");
+
+    auto payload = utils::verifyToken(token);
+    ASSERT_TRUE(payload.has_value());
+    EXPECT_EQ(payload->user_id, 42);
+    EXPECT_EQ(payload->username, "legacyuser");
+    EXPECT_EQ(payload->role, "user");
 }
 
 TEST(JWT, DifferentUsersProduceDifferentTokens) {

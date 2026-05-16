@@ -14,6 +14,7 @@ function normalizeUserInfo(rawUser, fallbackUsername = '') {
     username,
     nickname: user.nickname || username,
     email: user.email || '',
+    role: user.role === 'admin' ? 'admin' : 'user',
   };
 }
 
@@ -25,6 +26,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => !!token.value && !isTokenExpired(token.value));
   const username = computed(() => userInfo.value?.username || '');
   const nickname = computed(() => userInfo.value?.nickname || username.value);
+  const isAdmin = computed(() => userInfo.value?.role === 'admin');
 
   function resetAuthState() {
     token.value = '';
@@ -112,6 +114,7 @@ export const useAuthStore = defineStore('auth', () => {
     userInfo,
     isLoggingIn,
     isAuthenticated,
+    isAdmin,
     username,
     nickname,
     login,
