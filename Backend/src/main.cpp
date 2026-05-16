@@ -16,6 +16,8 @@
 #include "services/null_cache_client.h"
 #include "services/redis_client.h"
 #include "services/image_cache_key.h"
+#include "controllers/metrics_controller.h"
+#include "services/metrics_cache_client.h"
 
 int main() {
     try {
@@ -70,6 +72,14 @@ int main() {
             spdlog::warn("Cache init failed: {} - falling back to no cache", e.what());
             cacheClient = std::make_shared<cache::NullCacheClient>();
         }
+
+        // Wrap with metrics decorator before injecting so all ImageService and TaskEngine
+        // cache operations flow through MetricsCacheClient.
+        auto cacheMetrics = std::make_shared<cache::CacheMetrics>();
+        cacheClient = std::make_shared<cache::MetricsCacheClient>(cacheClient, cacheMetrics);
+        MetricsController::setMetrics(cacheMetrics);
+        spdlog::info("Cache metrics endpoint enabled at /api/metrics/cache");
+
         ImageService::setDefaultCache(cacheClient);
 
         // --- Database initialization ---

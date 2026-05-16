@@ -1,6 +1,8 @@
 # ZImage Backend 优化计划
 
-## 1. MinIO 客户端连接复用
+> **进度（2026-05-16）：** P0 的 Redis Cache-Aside 收尾完成：PR1–PR5 已落地，PR5 已补 15 个单测并通过 UnitTests。下一步从 item 3（错误处理统一）开始。详见文末 [进度日志](#进度日志-2026-05-16)。
+
+## 1. MinIO 客户端连接复用 ✅ 已完成 (4cf7f19)
 
 **问题：** `MinioClient` 每次调用 `putObject`/`getObject`/`presignGetUrl`/`deleteObject`/`ensureBucketExists` 都通过 `createClient(config_)` 重新创建 `ClientBundle`（含 BaseUrl 解析、Provider 构造、Client 实例化）。在 `presignListImages` 等列表场景下 N 张图触发 N 次连接创建。
 
@@ -15,7 +17,7 @@
 
 ---
 
-## 2. 拆分 image_service.cpp
+## 2. 拆分 image_service.cpp ✅ 已完成 (98417d7)
 
 **问题：** `image_service.cpp` 约 1000 行，混合了任务引擎（worker 线程池、lease 管理、lease 过期扫描）、远程调用（构建 payload、HTTP 请求、结果解析、图片下载）、参数校验、状态归一化、presign 签名等职责。
 
@@ -33,7 +35,7 @@
 
 ---
 
-## 3. 统一错误处理模式 — Repo 层迁移到 std::expected
+## 3. 统一错误处理模式 — Repo 层迁移到 std::expected ⏳ 未开始
 
 **问题：** 当前存在三种错误模式并存：
 - Service 层：`std::expected<T, ServiceError>`
@@ -56,7 +58,7 @@
 
 ---
 
-## 4. C++23 std::ranges 替换手写循环
+## 4. C++23 std::ranges 替换手写循环 ⏳ 未开始
 
 **问题：** 多处手写 for 循环做 transform/filter 操作，可用 `std::ranges` 表达更简洁。
 
@@ -71,7 +73,7 @@
 
 ---
 
-## 5. 残留 std::to_string → std::format 统一
+## 5. 残留 std::to_string → std::format 统一 ⏳ 未开始
 
 **问题：** 项目大部分地方已用 `std::format`，但仍有十余处使用 `std::to_string`，风格不一致。
 
@@ -84,7 +86,7 @@
 
 ---
 
-## 6. 扩大 std::string_view 使用范围
+## 6. 扩大 std::string_view 使用范围 ⏳ 未开始
 
 **问题：** 多处函数参数用 `const std::string&` 但只读不存储，可以改 `std::string_view` 减少不必要的拷贝和临时对象构造。
 
@@ -97,7 +99,7 @@
 
 ---
 
-## 7. Controller 样板代码消除
+## 7. Controller 样板代码消除 ⏳ 未开始
 
 **问题：** `image_controller.cpp` 每个 handler 都重复：创建 resp → setContentType → resolveUserId → new ImageService → 调方法 → 错误/成功处理 → callback。
 
@@ -129,7 +131,7 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 
 ---
 
-## 8. Redis 引入 Cache-Aside 缓存层
+## 8. Redis 引入 Cache-Aside 缓存层 ✅ 已完成 (PR1–PR5)
 
 **问题：** 当前 Redis 只作为任务队列 + 分布式锁使用，完全没发挥"高速缓存"的本职作用。所有读请求（`getById` / `listMy` / `listMyByStatus` / `getStatusById`）都直接打 MySQL，存在以下热点：
 
@@ -263,7 +265,7 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 
 ---
 
-**PR1 — `CacheClient` 基础设施**
+**PR1 — `CacheClient` 基础设施** ✅ 已完成 (5080b15)
 
 *内容：* 新增 `CacheClient` 抽象（`get` / `setex` / `del` / `bumpVersion`）+ `cache` 配置节 + Redis 可用性降级逻辑。
 
@@ -277,7 +279,7 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 
 ---
 
-**PR2 — `getById` 元数据缓存 + invalidation**
+**PR2 — `getById` 元数据缓存 + invalidation** ✅ 已完成 (acad82a)
 
 *内容：* `ImageService::getById` 走 Cache-Aside；`deleteById` / `cancelById` / `retryById` + task worker 状态流转处调用 `cache.del("zimage:img:meta:<id>")`。
 
@@ -292,7 +294,7 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 
 ---
 
-**PR3 — 列表缓存 + `list_ver` 版本号失效**
+**PR3 — 列表缓存 + `list_ver` 版本号失效** ✅ 已完成 (88f2c74)
 
 *内容：* `listMy` / `listMyByStatus` 走 Cache-Aside，key 拼 `list_ver`；写路径（`create` / `cancelById` / `retryById` / `deleteById` / worker 状态流转）调用 `cache.bumpVersion("img:list", userId)`。TTL 加 0–10s 随机抖动。
 
@@ -307,7 +309,7 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 
 ---
 
-**PR4 — presigned URL 缓存**
+**PR4 — presigned URL 缓存** ✅ 已完成（已提交，commit hash 待补）
 
 *内容：* 在 `ImageService::getById` 和 `presignListImages` 中调用 `storage.presignUrl(storage_key)` 的位置加一层缓存；key 按 `storage_key` 哈希，TTL 取 MinIO presigned URL TTL 的 80%。
 
@@ -321,7 +323,7 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 
 ---
 
-**PR5 — 监控指标**
+**PR5 — 监控指标** ✅ 已完成（本次提交）
 
 *内容：* `cache_hit_total` / `cache_miss_total` / `cache_degraded_total`（Redis 不可用计数），按 namespace 打标签（`meta` / `list` / `url`）。
 
@@ -344,13 +346,67 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 
 ## 优先级
 
-| 优先级 | 任务 | 理由 |
-|--------|------|------|
-| P0 | 1. MinIO 连接复用 | 真实性能问题，列表页 N 次连接创建 |
-| P0 | 2. 拆分 image_service.cpp | 面试高频追问点，展示架构能力 |
-| P0 | 8. Redis Cache-Aside 缓存层 | 补齐 Redis 核心用法，面试必问点，工程收益 + 展示价值双高 |
-| P1 | 3. 统一错误处理 | 一致性问题，面试容易被问 |
-| P1 | 4. std::ranges 替换循环 | 最直观的 C++23 升级展示 |
-| P2 | 5. std::to_string → std::format | 风格统一，改动小 |
-| P2 | 6. std::string_view | 性能微优化，需逐个判断兼容性 |
-| P2 | 7. Controller 样板消除 | 代码整洁度，非阻塞 |
+| 优先级 | 任务 | 状态 | 理由 |
+|--------|------|------|------|
+| P0 | 1. MinIO 连接复用 | ✅ | 真实性能问题，列表页 N 次连接创建 |
+| P0 | 2. 拆分 image_service.cpp | ✅ | 面试高频追问点，展示架构能力 |
+| P0 | 8. Redis Cache-Aside 缓存层 | ✅ | 补齐 Redis 核心用法，面试必问点，工程收益 + 展示价值双高 |
+| P1 | 3. 统一错误处理 | ⏳ | 一致性问题，面试容易被问 |
+| P1 | 4. std::ranges 替换循环 | ⏳ | 最直观的 C++23 升级展示 |
+| P2 | 5. std::to_string → std::format | ⏳ | 风格统一，改动小 |
+| P2 | 6. std::string_view | ⏳ | 性能微优化，需逐个判断兼容性 |
+| P2 | 7. Controller 样板消除 | ⏳ | 代码整洁度，非阻塞 |
+
+---
+
+## 进度日志 (2026-05-16)
+
+### 本会话期间完成
+
+**PR4 — presigned URL 缓存** ✅ 已提交
+- 新增：`image_cache::presignKey` / `derivePresignTtl(minioExpiry * 0.8)` / `kPresignCacheTtlRatio`
+- `ImageService::setPresignTtl` 静态 setter，main.cpp 启动时从 MinIO `presign_expiry_seconds` 派生（不引入独立配置字段，避免配置漂移）
+- `ImageService::presignWithCache` 私有方法：三道防御（空 key 跳过 / TTL=0 fallback / 空 url 不写 cache）
+- `presignListImages` free function 移成 `presignListImagesInPlace` 成员方法（让 cache_ 可访问）
+- 失效点：`deleteById` 加 `cache_->del(presignKey(storage_key))`
+- 单测：`test_image_service_presign_cache.cpp` 11 个用例（含 derivePresignTtl 边界 / hit/miss/不同 key 隔离 / deleteById 失效 / listMy 走 cache / 空 storage_key / 空 url 不写 cache / Redis 不可用 fallback / TTL=0 禁用）
+- **顺手踩的坑（记录给后续 PR）**：
+  1. `std::max(...)` 在 Windows 上会被 `<windows.h>` 宏展开 —— 必须写 `(std::max)(...)` 加 paren 防御。项目其它地方都这样做了，新代码沿用。
+  2. CMake `GLOB_RECURSE` + `CONFIGURE_DEPENDS` 加新文件后偶尔需要强制 reconfigure 才能让 Visual Studio 重新扫描。
+
+### 本会话期间完成（续）
+
+**PR5 — 监控指标** ✅ 已完成
+
+已写的文件：
+- `Backend/include/services/cache_metrics.h` — `Namespace` enum + `CacheMetrics` 类（3 个 atomic counter × 4 namespace）+ `classifyKey` / `namespaceName`
+- `Backend/src/services/cache_metrics.cpp` — 实现
+- `Backend/include/services/metrics_cache_client.h` — Decorator 声明
+- `Backend/src/services/metrics_cache_client.cpp` — Decorator 实现（只在 `get` 路径记录 hit/miss/degraded，其它方法透明转发）
+- `Backend/include/controllers/metrics_controller.h` — Drogon HttpController，`ADD_METHOD_TO` 暴露 `GET /api/metrics/cache`
+- `Backend/src/controllers/metrics_controller.cpp` — endpoint 实现，503 fallback 当 metrics 未初始化
+- `Backend/src/main.cpp` — 创建 `CacheMetrics` 实例，**包装 cacheClient 后再调 `setDefaultCache`**（顺序很重要，否则 controller 拿到 raw cache，metrics 永远 0）
+- `Backend/tests/unit/test_cache_metrics.cpp` — 9 个用例，覆盖 key 分类、namespace 隔离、atomic counter 并发递增、JSON snapshot
+- `Backend/tests/unit/test_metrics_cache_client.cpp` — 6 个用例，覆盖 decorator hit/miss/degraded、构造防御、非 get 操作透明转发
+
+已修复的 bug（本会话内）：
+- main.cpp 装配顺序：之前 `setDefaultCache` 在 wrap 前 → 99% 流量不计数。已挪到 wrap 后。
+- `metrics_controller.h`：之前用 `METHOD_ADD("/cache", ...)` → 实际路径变成 `/MetricsController/cache`。已改为 `ADD_METHOD_TO("/api/metrics/cache", ...)`。
+- `metrics_controller.cpp` 缺 `#include <nlohmann/json.hpp>` —— `toJson().dump()` 需要完整定义，fwd 不够。
+- `classifyKey` 改成 if + return 链（早返回风格，跟其它 helper 一致）。
+
+验证：
+- `unit_tests.exe --gtest_filter=CacheMetrics*:*MetricsCacheClient*`：15 个 PR5 单测全过
+- `ctest --test-dir out/build/x64-debug -C Debug -R UnitTests --output-on-failure`：UnitTests 全过
+
+### 下一次会话从这里继续
+
+**Step 1：开始 item 3（错误处理统一）**，先做 Repo 层错误模型和迁移边界设计，再决定是否分 PR 推进。
+
+### 关键文件指引（下次会话快速定位）
+
+- 缓存 key/TTL 集中处：`Backend/include/services/image_cache_key.h`
+- 缓存装配链：`Backend/src/main.cpp` line ~58–90
+- ImageService cache 注入点：`Backend/src/services/image_service.cpp` `defaultCacheClient()` + `setDefaultCache`
+- TaskEngine cache 注入点：`Backend/src/services/task_engine.cpp` `Impl::cache` + `invalidateAllForTask`
+- 测试 fakes：`Backend/tests/unit/image_service_test_fakes.h`
