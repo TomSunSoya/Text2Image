@@ -3,6 +3,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "database/i_image_repo.h"
 #include "models/i_image_storage.h"
@@ -68,7 +69,7 @@ class FakeImageStorage : public IImageStorage {
         return false;
     }
 
-    std::string contentTypeForKey(const std::string&) const override {
+    std::string contentTypeForKey(std::string_view) const override {
         return "image/png";
     }
 };

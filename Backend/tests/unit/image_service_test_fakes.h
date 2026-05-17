@@ -307,7 +307,7 @@ class FakeImageStorage : public IImageStorage {
         return true;
     }
 
-    std::string contentTypeForKey(const std::string&) const override {
+    std::string contentTypeForKey(std::string_view) const override {
         return "image/png";
     }
 };

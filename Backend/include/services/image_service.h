@@ -5,6 +5,7 @@
 #include <expected>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -33,7 +34,7 @@ class ImageService {
     [[nodiscard]] std::expected<ImageListResult, ServiceError> listMy(int64_t userId, int page,
                                                                       int size) const;
     [[nodiscard]] std::expected<ImageListResult, ServiceError>
-    listMyByStatus(int64_t userId, const std::string& status, int page, int size) const;
+    listMyByStatus(int64_t userId, std::string_view status, int page, int size) const;
 
     [[nodiscard]] std::expected<ImageGetResult, ServiceError>
     getById(int64_t userId, int64_t id, bool includeImagePayload = true) const;
@@ -54,9 +55,9 @@ class ImageService {
     std::shared_ptr<cache::ICacheClient> cache_;
     GenerationClient generation_client_;
 
-    void writeToCache(const std::string& key, const models::ImageGeneration& image) const;
+    void writeToCache(std::string_view key, const models::ImageGeneration& image) const;
     void presignInPlace(models::ImageGeneration& image) const;
-    void writeListCache(const std::string& key, const ImageListResult& result) const;
+    void writeListCache(std::string_view key, const ImageListResult& result) const;
     void invalidateListCacheFor(int64_t userId) const;
     [[nodiscard]] std::string presignWithCache(const std::string& storageKey) const;
     void presignListImagesInPlace(std::vector<models::ImageGeneration>& images) const;

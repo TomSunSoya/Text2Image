@@ -8,6 +8,7 @@
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <spdlog/spdlog.h>
@@ -127,8 +128,7 @@ void ImageService::presignListImagesInPlace(std::vector<models::ImageGeneration>
     }
 }
 
-void ImageService::writeToCache(const std::string& key,
-                                const models::ImageGeneration& image) const {
+void ImageService::writeToCache(std::string_view key, const models::ImageGeneration& image) const {
     try {
         auto sanitized = image;
         sanitized.image_bytes.clear();
@@ -151,18 +151,17 @@ void ImageService::presignInPlace(models::ImageGeneration& image) const {
     }
 }
 
-void ImageService::writeListCache(const std::string& key, const ImageListResult& result) const {
+void ImageService::writeListCache(std::string_view key, const ImageListResult& result) const {
     try {
         nlohmann::json j;
         j["total_elements"] = result.total_elements;
-        auto content = result.content
-            | std::views::transform([](const auto& img) {
-                  auto sanitized = img;
-                  sanitized.image_bytes.clear();
-                  sanitized.image_url.clear();
-                  return sanitized.toJson();
-              })
-            | std::ranges::to<std::vector<nlohmann::json>>();
+        auto content = result.content | std::views::transform([](const auto& img) {
+                           auto sanitized = img;
+                           sanitized.image_bytes.clear();
+                           sanitized.image_url.clear();
+                           return sanitized.toJson();
+                       }) |
+                       std::ranges::to<std::vector<nlohmann::json>>();
         j["content"] = nlohmann::json(std::move(content));
         cache_->setex(key, j.dump(), image_cache::listTtlWithJitter());
     } catch (const std::exception& ex) {
@@ -337,7 +336,7 @@ std::expected<ImageListResult, ServiceError> ImageService::listMy(int64_t userId
 }
 
 std::expected<ImageListResult, ServiceError>
-ImageService::listMyByStatus(int64_t userId, const std::string& status, int page, int size) const {
+ImageService::listMyByStatus(int64_t userId, std::string_view status, int page, int size) const {
     if (userId <= 0) {
         return std::unexpected(
             ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});

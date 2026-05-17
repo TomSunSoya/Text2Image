@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 class IImageStorage {
   public:
@@ -15,5 +16,5 @@ class IImageStorage {
 
     virtual bool remove(const std::string& storageKey) const = 0;
 
-    [[nodiscard]] virtual std::string contentTypeForKey(const std::string& storageKey) const = 0;
+    [[nodiscard]] virtual std::string contentTypeForKey(std::string_view storageKey) const = 0;
 };
