@@ -1,7 +1,9 @@
 #include "services/redis_client.h"
 
 #include <algorithm>
+#include <ranges>
 #include <tuple>
+
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <sw/redis++/redis++.h>
@@ -70,11 +72,9 @@ void redis::RedisClient::rebuildTaskQueue(const std::vector<int64_t>& taskIds) {
         return #ARGV
     )";
 
-    std::vector<std::string> args;
-    args.reserve(taskIds.size());
-    for (const auto taskId : taskIds) {
-        args.push_back(std::to_string(taskId));
-    }
+    auto args = taskIds
+        | std::views::transform([](int64_t id) { return std::to_string(id); })
+        | std::ranges::to<std::vector<std::string>>();
 
     const std::vector<std::string> keys{config_.task_queue_key};
 

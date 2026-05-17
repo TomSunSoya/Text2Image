@@ -155,14 +155,15 @@ void ImageService::writeListCache(const std::string& key, const ImageListResult&
     try {
         nlohmann::json j;
         j["total_elements"] = result.total_elements;
-        auto content = nlohmann::json::array();
-        for (const auto& img : result.content) {
-            auto sanitized = img;
-            sanitized.image_bytes.clear();
-            sanitized.image_url.clear();
-            content.push_back(sanitized.toJson());
-        }
-        j["content"] = std::move(content);
+        auto content = result.content
+            | std::views::transform([](const auto& img) {
+                  auto sanitized = img;
+                  sanitized.image_bytes.clear();
+                  sanitized.image_url.clear();
+                  return sanitized.toJson();
+              })
+            | std::ranges::to<std::vector<nlohmann::json>>();
+        j["content"] = nlohmann::json(std::move(content));
         cache_->setex(key, j.dump(), image_cache::listTtlWithJitter());
     } catch (const std::exception& ex) {
         spdlog::warn("ImageService::writeListCache failed for key '{}': {}", key, ex.what());
