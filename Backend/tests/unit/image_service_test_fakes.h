@@ -70,8 +70,7 @@ class SpyCacheClient : public cache::ICacheClient {
         return it->second;
     }
 
-    bool setex(std::string_view key, std::string_view value,
-               std::chrono::seconds ttl) override {
+    bool setex(std::string_view key, std::string_view value, std::chrono::seconds ttl) override {
         if (!available) {
             return false;
         }
@@ -109,6 +108,7 @@ class SpyCacheClient : public cache::ICacheClient {
 class FakeImageRepo : public IImageRepo {
   public:
     std::map<std::pair<int64_t, int64_t>, models::ImageGeneration> images;
+    std::optional<RepoError> next_error;
     int find_by_user_calls{0};
     int find_by_status_calls{0};
     int find_by_id_calls{0};
@@ -117,7 +117,11 @@ class FakeImageRepo : public IImageRepo {
     int cancel_calls{0};
     int retry_calls{0};
 
-    int64_t insert(const models::ImageGeneration& generation) override {
+    RepoResult<int64_t> insert(const models::ImageGeneration& generation) override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+
         ++insert_calls;
         auto saved = generation;
         if (saved.id == 0) {
@@ -127,7 +131,11 @@ class FakeImageRepo : public IImageRepo {
         return saved.id;
     }
 
-    ImagePageResult findByUserId(int64_t userId, int page, int size) override {
+    RepoResult<ImagePageResult> findByUserId(int64_t userId, int page, int size) override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+
         ++find_by_user_calls;
         std::vector<models::ImageGeneration> rows;
         for (const auto& [key, image] : images) {
@@ -138,8 +146,12 @@ class FakeImageRepo : public IImageRepo {
         return slicePage(std::move(rows), page, size);
     }
 
-    ImagePageResult findByUserIdAndStatus(int64_t userId, models::TaskStatus status, int page,
-                                          int size) override {
+    RepoResult<ImagePageResult> findByUserIdAndStatus(int64_t userId, models::TaskStatus status,
+                                                      int page, int size) override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+
         ++find_by_status_calls;
         std::vector<models::ImageGeneration> rows;
         for (const auto& [key, image] : images) {
@@ -150,8 +162,12 @@ class FakeImageRepo : public IImageRepo {
         return slicePage(std::move(rows), page, size);
     }
 
-    std::optional<models::ImageGeneration> findByIdAndUserId(int64_t id,
-                                                             int64_t userId) override {
+    RepoResult<std::optional<models::ImageGeneration>> findByIdAndUserId(int64_t id,
+                                                                         int64_t userId) override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+
         ++find_by_id_calls;
         const auto it = images.find({id, userId});
         if (it == images.end()) {
@@ -160,8 +176,12 @@ class FakeImageRepo : public IImageRepo {
         return it->second;
     }
 
-    std::optional<models::ImageGeneration> findByRequestIdAndUserId(const std::string& requestId,
-                                                                    int64_t userId) override {
+    RepoResult<std::optional<models::ImageGeneration>>
+    findByRequestIdAndUserId(const std::string& requestId, int64_t userId) override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+
         for (const auto& [key, image] : images) {
             if (key.second == userId && image.request_id == requestId) {
                 return image;
@@ -170,43 +190,53 @@ class FakeImageRepo : public IImageRepo {
         return std::nullopt;
     }
 
-    bool deleteByIdAndUserId(int64_t id, int64_t userId) override {
+    RepoResult<bool> deleteByIdAndUserId(int64_t id, int64_t userId) override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+
         ++delete_calls;
         return images.erase({id, userId}) > 0;
     }
 
-    bool cancelByIdAndUserId(int64_t id, int64_t userId,
-                             models::ImageGeneration* updated) override {
+    RepoResult<std::optional<models::ImageGeneration>>
+    cancelByIdAndUserId(int64_t id, int64_t userId) override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+
         ++cancel_calls;
         auto it = images.find({id, userId});
         if (it == images.end()) {
-            return false;
+            return std::nullopt;
         }
         it->second.status = models::TaskStatus::Cancelled;
         it->second.cancelled_at = stableTime();
-        if (updated != nullptr) {
-            *updated = it->second;
-        }
-        return true;
+        return it->second;
     }
 
-    bool retryByIdAndUserId(int64_t id, int64_t userId,
-                            models::ImageGeneration* updated) override {
+    RepoResult<std::optional<models::ImageGeneration>> retryByIdAndUserId(int64_t id,
+                                                                          int64_t userId) override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+
         ++retry_calls;
         auto it = images.find({id, userId});
         if (it == images.end()) {
-            return false;
+            return std::nullopt;
         }
         it->second.status = models::TaskStatus::Queued;
         ++it->second.retry_count;
         it->second.error_message.clear();
-        if (updated != nullptr) {
-            *updated = it->second;
-        }
-        return true;
+        return it->second;
     }
 
-    std::vector<ExpiredLease> expireLeasesReturningExpired() override {
+    RepoResult<std::vector<ExpiredLease>> expireLeasesReturningExpired() override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+
         return {};
     }
 
@@ -216,6 +246,16 @@ class FakeImageRepo : public IImageRepo {
     }
 
   private:
+    std::optional<RepoError> consumeError() {
+        if (!next_error) {
+            return std::nullopt;
+        }
+
+        auto error = std::move(next_error);
+        next_error.reset();
+        return error;
+    }
+
     static std::chrono::system_clock::time_point stableTime() {
         return *utils::chrono::fromDbString("2026-01-02 03:04:05");
     }
@@ -272,8 +312,7 @@ class FakeImageStorage : public IImageStorage {
     }
 };
 
-inline models::ImageGeneration makeImage(int64_t id, int64_t userId,
-                                         models::TaskStatus status) {
+inline models::ImageGeneration makeImage(int64_t id, int64_t userId, models::TaskStatus status) {
     models::ImageGeneration image;
     image.id = id;
     image.user_id = userId;
@@ -317,4 +356,4 @@ inline nlohmann::json cachedJsonFor(const SpyCacheClient& cache, const std::stri
     return nlohmann::json::parse(it->second);
 }
 
-}  // namespace image_service_test_fakes
+} // namespace image_service_test_fakes

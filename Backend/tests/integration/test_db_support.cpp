@@ -135,7 +135,10 @@ void ensureUsersTable() {
 
 void ensureImageTable() {
     ImageRepo repo;
-    (void)repo.findByUserId(0, 0, 1);
+    auto result = repo.findByUserId(0, 0, 1);
+    if (!result) {
+        throw std::runtime_error(result.error().message);
+    }
 }
 
 } // namespace

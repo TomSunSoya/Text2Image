@@ -203,6 +203,20 @@ TEST(ImageServiceCache, CacheUnavailableFallsBackToRepoWithoutFailingRequest) {
     EXPECT_TRUE(cache->setex_calls.empty());
 }
 
+TEST(ImageServiceCache, RepoUnavailableReturnsServiceUnavailable) {
+    auto repo = std::make_shared<FakeImageRepo>();
+    auto storage = std::make_shared<FakeImageStorage>();
+    auto cache = std::make_shared<SpyCacheClient>();
+    repo->next_error = RepoError{RepoError::Kind::DbUnavailable, "mysql is down"};
+    auto service = makeService(repo, storage, cache);
+
+    const auto result = service.getById(7, 42, false);
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().status, drogon::k503ServiceUnavailable);
+    EXPECT_EQ(result.error().code, "database_unavailable");
+}
+
 TEST(ImageServiceCache, DirtyCachedJsonIsEvictedAndFallsBackToRepo) {
     auto repo = std::make_shared<FakeImageRepo>();
     auto storage = std::make_shared<FakeImageStorage>();

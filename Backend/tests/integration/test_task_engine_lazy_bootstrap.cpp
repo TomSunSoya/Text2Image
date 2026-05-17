@@ -57,9 +57,10 @@ TEST(TaskEngineLazyBootstrap, EnqueueStartsWorkersWithoutExplicitBootstrap) {
     models::TaskStatus lastStatus = models::TaskStatus::Queued;
     while (std::chrono::steady_clock::now() < deadline) {
         auto task = repo.findByIdAndUserId(created->generation.id, userId);
-        ASSERT_TRUE(task.has_value());
+        ASSERT_TRUE(task.has_value()) << task.error().message;
+        ASSERT_TRUE(task->has_value());
 
-        lastStatus = task->status;
+        lastStatus = (*task)->status;
         if (models::isTerminal(lastStatus)) {
             break;
         }

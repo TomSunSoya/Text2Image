@@ -15,6 +15,7 @@
 
 #include "Backend.h"
 #include "database/ImageRepo.h"
+#include "database/repo_error.h"
 #include "services/generation_client.h"
 #include "services/redis_client.h"
 #include "services/task_event_hub.h"
@@ -59,6 +60,11 @@ TaskEngineConfig loadTaskEngineConfig() {
 
 std::chrono::seconds leaseRenewInterval(long leaseSeconds) {
     return std::chrono::seconds((std::max)(1l, leaseSeconds / 2));
+}
+
+void logRepoError(spdlog::level::level_enum level, const char* action, const RepoError& error) {
+    spdlog::log(level, "{} repository error kind={}, message={}", action,
+                static_cast<int>(error.kind), error.message);
 }
 
 } // namespace
@@ -135,20 +141,15 @@ struct TaskEngine::Impl {
                     spdlog::info("Redis is unavailable, start MySQL renew");
                 }
 
-                try {
-                    if (!repo.renewLease(taskId, userId, workerId, leaseSeconds)) {
-                        spdlog::warn("lease keeper lost task claim id={}, user_id={}, worker_id={}",
-                                     taskId, userId, workerId);
-                        break;
-                    }
-                } catch (const std::exception& ex) {
+                auto renewed = repo.renewLease(taskId, userId, workerId, leaseSeconds);
+                if (!renewed) {
                     spdlog::warn("lease keeper failed to renew lease id={}, user_id={}, "
                                  "worker_id={}, reason={}",
-                                 taskId, userId, workerId, ex.what());
-                } catch (...) {
-                    spdlog::warn("lease keeper failed to renew lease id={}, user_id={}, "
-                                 "worker_id={}, reason=unknown",
+                                 taskId, userId, workerId, renewed.error().message);
+                } else if (!*renewed) {
+                    spdlog::warn("lease keeper lost task claim id={}, user_id={}, worker_id={}",
                                  taskId, userId, workerId);
+                    break;
                 }
 
                 nextRenewal = now + renewEvery;
@@ -167,7 +168,7 @@ struct TaskEngine::Impl {
 
         auto leaseKeeper = startLeaseKeeper(task, workerId);
         auto result = generation_client.generate(task);
-        const bool finished = repo.finishClaimedTask(result);
+        auto finishedResult = repo.finishClaimedTask(result);
         leaseKeeper.request_stop();
 
         try {
@@ -178,7 +179,11 @@ struct TaskEngine::Impl {
         } catch (...) {
         }
 
-        if (!finished) {
+        if (!finishedResult) {
+            logRepoError(spdlog::level::warn, "finish claimed task", finishedResult.error());
+            GenerationClient::cleanupOrphanedStoredImage(result);
+            spdlog::warn("task worker failed to finish claimed task id = {}", task.id);
+        } else if (!*finishedResult) {
             GenerationClient::cleanupOrphanedStoredImage(result);
             spdlog::warn("task worker failed to finish claimed task id = {}", task.id);
         } else {
@@ -209,19 +214,30 @@ struct TaskEngine::Impl {
                     }
                     auto task = repo.claimTaskById(*taskId, workerId, config.lease_seconds);
                     if (!task) {
+                        logRepoError(spdlog::level::warn, "claim task by id", task.error());
                         r.releaseLease(*taskId, workerId);
                         continue;
                     }
-                    processClaimedTask(repo, *task, workerId);
+                    if (!*task) {
+                        r.releaseLease(*taskId, workerId);
+                        continue;
+                    }
+                    processClaimedTask(repo, **task, workerId);
                 } else {
                     auto task = repo.claimNextTask(workerId, config.lease_seconds);
                     if (!task) {
+                        logRepoError(spdlog::level::warn, "claim next task", task.error());
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(config.poll_interval_ms));
+                        continue;
+                    }
+                    if (!*task) {
                         std::unique_lock lock(notify_mutex);
                         notify_cv.wait_for(lock,
                                            std::chrono::milliseconds(config.poll_interval_ms));
                         continue;
                     }
-                    processClaimedTask(repo, *task, workerId);
+                    processClaimedTask(repo, **task, workerId);
                 }
             } catch (const std::exception& ex) {
                 spdlog::error("task worker exception: {}, worker_id={}", ex.what(), workerId);
@@ -244,8 +260,13 @@ struct TaskEngine::Impl {
 
             try {
                 auto expired = repo.expireLeasesReturningExpired();
+                if (!expired) {
+                    logRepoError(spdlog::level::err, "lease expiry scanner", expired.error());
+                    recoverOrphanedTasks();
+                    continue;
+                }
                 size_t requeued = 0;
-                for (const auto& t : expired) {
+                for (const auto& t : *expired) {
                     invalidateAllForTask(t.user_id, t.id);
                     if (t.requeue) {
                         enqueue(t.id);
@@ -274,10 +295,14 @@ struct TaskEngine::Impl {
 
             ImageRepo repo;
             auto ids = repo.findQueuedTaskIds();
-            r.rebuildTaskQueue(ids);
+            if (!ids) {
+                logRepoError(spdlog::level::warn, "recover orphaned tasks", ids.error());
+                return;
+            }
+            r.rebuildTaskQueue(*ids);
 
-            if (!ids.empty()) {
-                spdlog::info("Recovered {} orphaned queued task(s) into Redis", ids.size());
+            if (!ids->empty()) {
+                spdlog::info("Recovered {} orphaned queued task(s) into Redis", ids->size());
             }
         } catch (const std::exception& ex) {
             spdlog::warn("Failed to recover orphaned tasks: {}", ex.what());

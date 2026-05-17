@@ -12,40 +12,44 @@ namespace {
 
 class FakeImageRepo : public IImageRepo {
   public:
-    int64_t insert(const models::ImageGeneration&) override {
+    RepoResult<int64_t> insert(const models::ImageGeneration&) override {
         return 1;
     }
 
-    ImagePageResult findByUserId(int64_t, int, int) override {
+    RepoResult<ImagePageResult> findByUserId(int64_t, int, int) override {
         return {};
     }
 
-    ImagePageResult findByUserIdAndStatus(int64_t, models::TaskStatus, int, int) override {
+    RepoResult<ImagePageResult> findByUserIdAndStatus(int64_t, models::TaskStatus, int,
+                                                      int) override {
         return {};
     }
 
-    std::optional<models::ImageGeneration> findByIdAndUserId(int64_t, int64_t) override {
+    RepoResult<std::optional<models::ImageGeneration>> findByIdAndUserId(int64_t,
+                                                                         int64_t) override {
+        return std::optional<models::ImageGeneration>{};
+    }
+
+    RepoResult<std::optional<models::ImageGeneration>> findByRequestIdAndUserId(const std::string&,
+                                                                                int64_t) override {
+        return std::optional<models::ImageGeneration>{};
+    }
+
+    RepoResult<bool> deleteByIdAndUserId(int64_t, int64_t) override {
+        return false;
+    }
+
+    RepoResult<std::optional<models::ImageGeneration>> cancelByIdAndUserId(int64_t,
+                                                                           int64_t) override {
         return std::nullopt;
     }
 
-    std::optional<models::ImageGeneration> findByRequestIdAndUserId(const std::string&,
-                                                                    int64_t) override {
+    RepoResult<std::optional<models::ImageGeneration>> retryByIdAndUserId(int64_t,
+                                                                          int64_t) override {
         return std::nullopt;
     }
 
-    bool deleteByIdAndUserId(int64_t, int64_t) override {
-        return false;
-    }
-
-    bool cancelByIdAndUserId(int64_t, int64_t, models::ImageGeneration*) override {
-        return false;
-    }
-
-    bool retryByIdAndUserId(int64_t, int64_t, models::ImageGeneration*) override {
-        return false;
-    }
-
-    std::vector<ExpiredLease> expireLeasesReturningExpired() override {
+    RepoResult<std::vector<ExpiredLease>> expireLeasesReturningExpired() override {
         return {};
     }
 };
