@@ -1,7 +1,13 @@
 #pragma once
 
+#include <expected>
 #include <string>
 #include <vector>
+
+struct HttpError {
+    long status_code{0};
+    std::string message;
+};
 
 struct HttpResult {
     long status_code{0};
@@ -9,6 +15,7 @@ struct HttpResult {
     std::string error;
 
     bool ok() const;
+    [[nodiscard]] std::expected<std::string, HttpError> toExpectedBody() const;
 };
 
 class IHttpClient {

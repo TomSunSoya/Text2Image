@@ -170,6 +170,18 @@ bool HttpResult::ok() const {
     return error.empty() && status_code >= 200 && status_code < 300;
 }
 
+std::expected<std::string, HttpError> HttpResult::toExpectedBody() const {
+    if (ok()) {
+        return body;
+    }
+
+    auto message = error;
+    if (message.empty()) {
+        message = std::format("http status {}", status_code);
+    }
+    return std::unexpected(HttpError{status_code, std::move(message)});
+}
+
 HttpResult HttpClient::get(const std::string& url, long timeoutSeconds,
                            const std::vector<std::string>& headers, bool followRedirects) const {
     constexpr int kMaxRedirects = 5;
