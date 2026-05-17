@@ -1,110 +1,164 @@
-# ZImage Workspace
+# ZImage — Distributed Async Image Generation Backend
 
-## 1. Scope
+**English** | [简体中文](./README.zh-CN.md)
 
-This repository currently includes the main delivery path:
+Production-style image generation service with end-to-end task orchestration: Vue 3 frontend, C++23 Drogon backend, and Python FastAPI model service. The backend owns auth, task lifecycle, queue coordination, Redis-backed cache, MinIO storage, and WebSocket-based status push. **190 unit tests + integration tests + Docker-based CI.**
 
-- `ZImageFrontend/`: frontend, built with Vue 3 + Vite + Element Plus
-- `Backend/`: backend API and task orchestration, built with C++20 + Drogon + MySQL
-- `ModelService/`: model execution service, built with FastAPI + Diffusers
+## Architecture
 
-## 2. Architecture
+```mermaid
+flowchart LR
+    User([User])
+    FE[Vue 3 Frontend]
+    BE[C++23 Backend Drogon :8080]
+    MS[Python ModelService FastAPI :8081]
+    DB[(MySQL 8.4)]
+    R[(Redis 7.4)]
+    S[(MinIO)]
 
-The system is split into three layers:
-
-1. `ZImageFrontend` only talks to `Backend`
-2. `Backend` owns auth, task lifecycle, history, storage metadata, and model-service orchestration
-3. `ModelService` focuses on model execution and execution health
-
-Default ports:
-
-- frontend: `80` (nginx in Docker) / `3000` (Vite dev server)
-- backend: `8080`
-- model service: `8081`
-
-## 3. Main Flow
-
-Image generation currently works like this:
-
-1. frontend sends `POST /api/images`
-2. backend creates a task in MySQL with status `queued` and enqueues the task ID to Redis (if available)
-3. backend workers dequeue from Redis (or fall back to MySQL polling) and claim the task
-4. workers call `POST /generate` on `ModelService`
-5. `ModelService` generates the image, stores it in MinIO, and returns result metadata
-6. backend persists task status, timing, storage metadata, and history
-7. frontend receives real-time status updates via WebSocket (`/api/ws/images`) and lazily loads the final image
-
-## 4. Current Capabilities
-
-### 4.1 Auth
-
-- register: `POST /api/auth/register`
-- login: `POST /api/auth/login`
-- authenticated image APIs use Bearer token
-- users have a `role` field; regular registration always creates `user`, while admin-only
-  surfaces require `role = 'admin'`
-
-To promote an initial administrator after the user exists, run:
-
-```sql
-UPDATE users SET role = 'admin' WHERE username = '<your_username>';
+    User --> FE
+    FE -->|REST + WS| BE
+    BE -->|HTTP| MS
+    BE <-->|metadata| DB
+    BE <-->|queue + cache| R
+    BE <-->|images| S
+    MS -->|put| S
 ```
 
-The promoted user must log in again so the frontend receives a JWT and user payload with the
-updated `admin` role.
+Three-tier with a single call direction (Frontend → Backend → ModelService). The backend is the only component that holds business state.
 
-### 4.2 Image Tasks
+**Task flow:** `POST /api/images` creates a `queued` task in MySQL, enqueues the task ID to Redis. A worker pool dequeues, atomically claims the task via `UPDATE + subquery`, calls `POST /generate` on ModelService, and persists results. Clients receive status pushes through WebSocket (`/api/ws/images`). Canonical statuses: `queued / pending / generating / success / failed / cancelled / timeout`.
 
-- create task: `POST /api/images`
-- list current user tasks: `GET /api/images/my-list`
-- list by status: `GET /api/images/my-list/status/{status}`
-- get task detail: `GET /api/images/{id}`
-- get task status: `GET /api/images/{id}/status`
-- cancel task: `POST /api/images/{id}/cancel`
-- retry task: `POST /api/images/{id}/retry`
-- download protected image binary: `GET /api/images/{id}/binary`
-- delete task record: `DELETE /api/images/{id}`
+## Engineering Highlights
 
-Canonical task statuses currently used across the stack:
+#### Cache-Aside with version-bump invalidation
 
-- `queued`
-- `pending`
-- `generating`
-- `success`
-- `failed`
-- `cancelled`
-- `timeout`
+List cache keys are indexed by `<userId, version, page, size>`. Write paths call `INCR list_ver:<userId>` to invalidate **all paginations** for that user in O(1) — no SCAN+DEL, which has cursor-semantics issues under concurrent writes. Old keys age out via TTL.
 
-### 4.3 Health
+Code: `Backend/src/services/cache_client.cpp::bumpVersion` + `Backend/include/services/image_cache_key.h::listMyKey`
 
-- backend liveness: `GET /health`
-- backend proxy model health: `GET /api/images/health`
-- model service health: `GET http://<model-service-host>:8081/health`
-- admin cache metrics: `GET /api/metrics/cache`
+#### Worker lease + automatic expiry recovery
 
-`ModelService` health now distinguishes:
+Workers acquire a Redis lease on claim and heartbeat-renew it. If a worker process crashes, the lease expires naturally; a dedicated `leaseExpiryLoop` periodically scans `lease_expires_at < now` tasks. Within retry budget → requeue. Over budget → mark `timeout`. Single Redis + single MySQL, no external coordinator needed.
 
-- `healthy`: model loaded and idle
-- `busy`: model loaded and currently generating
-- `loading`: process is alive but model is still loading
-- `unhealthy`: model unavailable or failed to load
+Code: `Backend/src/services/task_engine.cpp::leaseExpiryLoop` + `Backend/src/database/ImageRepo.cpp::expireLeasesReturningExpired`
 
-## 5. Repository Layout
+#### Atomic task claim (UPDATE + inline subquery)
+
+A naive "SELECT oldest queued + UPDATE to generating" race allows two workers to claim the same task. The claim is implemented as a **single SQL statement** that updates the row returned by an inline subquery — MySQL row lock makes it atomic.
+
+Code: `Backend/src/database/ImageRepo.cpp::claimNextTask`
+
+#### Layered error model: `RepoError → ServiceError → HTTP`
+
+Repository layer returns `std::expected<T, RepoError>`. `RepoError::Kind` classifies into `DbUnavailable / QueryFailed / ConstraintViolation / Serialization / Internal`. Service layer maps to `ServiceError` (carrying HTTP status) via an explicit `mapRepoError()`. The data layer has zero dependency on Drogon and can be unit-tested standalone.
+
+Code: `Backend/include/database/repo_error.h` + `Backend/src/services/repo_error_mapper.cpp`
+
+#### MinIO connection reuse via `thread_local`
+
+The original implementation reconstructed `BaseUrl + StaticProvider + Client` on every call; a list page with N images triggered N constructions. Now `Client` instances live in a `thread_local unordered_map`, constructed once per thread per backend instance.
+
+Code: `Backend/src/services/minio_client.cpp::ClientBundle::client()`
+
+#### C++23 modern stack throughout
+
+End-to-end error propagation through `std::expected<T, E>` — no `throw` in business code, no out-params, error paths visible at compile time. `std::ranges::views::transform | ranges::to<>` replaces hand-rolled loops in transform/filter pipelines. `std::format` replaces string concatenation. `std::string_view` widened at all read-only parameter boundaries that don't cross third-party APIs.
+
+Code: `Backend/include/database/repo_invoke.h` (centralized exception → RepoError translation) + `Backend/include/controllers/handler_utils.h` (controller-side monadic adapter)
+
+## Design Decisions
+
+#### Cache invalidation: version-bump, not SCAN+DEL
+
+**Trade**: Old cache keys consume memory until their TTL (~60s ceiling, acceptable).
+**Gain**: O(1) invalidation, scales linearly to Redis Cluster with zero refactor.
+**Why**: SCAN's cursor semantics under concurrent writes don't guarantee catching all matching keys — silent dirty cache. `ICacheClient` deliberately does not expose `delByPattern` to prevent future misuse.
+
+#### Cache-Aside, not Write-Through
+
+**Trade**: Brief inconsistency window (delete-cache failure + concurrent read) is possible.
+**Gain**: Write path is simple: update DB, invalidate cache. No two-phase atomicity worries.
+**Why**: All keys have TTL ceilings — worst case self-heals within seconds. Write-Through's atomic-dual-write complexity isn't worth it for this consistency target.
+
+#### Five `I*` interfaces exist for testability, not for "future implementations"
+
+`IImageRepo / IUserRepo / ICacheClient / IImageStorage / IHttpClient` exist primarily so 190 unit tests can run without MySQL/Redis/MinIO. Not abstractions for hypothetical future swaps (YAGNI), but abstractions for actually-existing test seams (concrete value today). Fakes use a `next_error` field for fault injection.
+
+Code: `Backend/tests/unit/image_service_test_fakes.h`
+
+#### `std::expected<T, E>`, not throw / `optional<T>` / out-params
+
+**Trade**: Slight boilerplate at every error site (`return std::unexpected(...)`); adapters needed at boundaries with legacy-style libraries.
+**Gain**: Error paths visible in the signature; compiler forces callers to handle them; zero runtime overhead.
+**Why**: `optional<T>` can't express *why* something is missing. Out-params hide which arguments mutate. Exceptions have unbounded cost on hot paths — and worse, you can't tell from the signature what might throw.
+
+## API Reference
+
+### Auth
+
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- Authenticated image APIs use `Authorization: Bearer <token>`
+- Users have a `role` field; promote initial admin via SQL:
+  ```sql
+  UPDATE users SET role = 'admin' WHERE username = '<your_username>';
+  ```
+  The promoted user must re-login to refresh the JWT payload.
+
+### Image Tasks
+
+- `POST /api/images` — create
+- `GET /api/images/my-list` — list current user's tasks
+- `GET /api/images/my-list/status/{status}` — list by status
+- `GET /api/images/{id}` — get task detail
+- `GET /api/images/{id}/status` — get task status (lightweight)
+- `POST /api/images/{id}/cancel` — cancel
+- `POST /api/images/{id}/retry` — retry
+- `GET /api/images/{id}/binary` — download image binary (auth-protected)
+- `DELETE /api/images/{id}` — delete task record
+
+### Health & Metrics
+
+- `GET /health` — backend liveness
+- `GET /api/images/health` — backend-proxied model service health
+- `GET http://<model-service-host>:8081/health` — model service direct
+- `GET /api/metrics/cache` — admin-only cache hit/miss/degraded counters per namespace
+
+`ModelService` health states: `healthy` (loaded, idle) / `busy` (loaded, generating) / `loading` (alive, still initializing) / `unhealthy` (failed). The health response also exposes `active_kind` (`none / generate / edit`) so the backend can route work without conflicting with an in-progress job.
+
+## Repository Layout
 
 - `ZImageFrontend/src/`: pages, components, router, Pinia stores, API wrappers
-- `Backend/src/controllers/`: HTTP controllers
-- `Backend/src/services/`: business logic, task engine, external-service calls
-- `Backend/src/database/`: MySQL access and repositories
-- `Backend/src/models/`: task and storage-related data models
+- `Backend/src/controllers/`: HTTP controllers + `handler_utils` (shared JSON/auth/error envelope)
+- `Backend/src/services/`: business logic, task engine, cache layer, generation client
+- `Backend/src/database/`: MySQL access, repositories, `RepoError` + classification
+- `Backend/src/models/`: task and storage data models
+- `Backend/include/`: public headers mirroring `src/`
+- `Backend/tests/unit/` + `tests/integration/`: gtest test suites
 - `ModelService/model_service.py`: FastAPI model-service entrypoint
 - `ModelService/main.py`: local standalone model script
-- `docker-compose.yml`: service orchestration (MySQL, Redis, MinIO, Backend, ModelService, Frontend)
-- `docker-compose.prod.yml`: production overlay with resource limits and log rotation
-- `init-db/`: initial schema and versioned migration scripts
-- `scripts/`: operational utilities (formatting, database migrations)
+- `docker-compose.yml` + `docker-compose.prod.yml`: orchestration
+- `init-db/`: initial schema + versioned migrations
+- `scripts/`: formatting, migration utilities
 - `.github/workflows/`: CI pipelines
 
-## 6. Quick Start
+### Code Tour
+
+Want to drill into a specific topic? Here's where to look:
+
+| Topic | Start here |
+|---|---|
+| Cache layer + version-bump invalidation | `Backend/src/services/cache_client.cpp` + `include/services/image_cache_key.h` |
+| Cache metrics decorator + endpoint | `Backend/src/services/metrics_cache_client.cpp` + `controllers/metrics_controller.cpp` |
+| Repo error model + classification | `Backend/include/database/repo_error.h` + `src/database/repo_error.cpp` |
+| Repo → Service error mapper | `Backend/src/services/repo_error_mapper.cpp` |
+| Worker pool, lease, expiry loop | `Backend/src/services/task_engine.cpp` |
+| Atomic task claim SQL | `Backend/src/database/ImageRepo.cpp` (search `claimNextTask`) |
+| HTTP handler envelope + `std::expected` adapter | `Backend/include/controllers/handler_utils.h` |
+| Dependency-injection test seams | `Backend/tests/unit/image_service_test_fakes.h` |
+
+## Quick Start
 
 ### Prerequisites
 
@@ -117,7 +171,8 @@ For local development without Docker:
 - Node.js 20+, Python 3.11+, CMake 3.21+
 - Running MySQL, Redis, and MinIO instances
 
-### 6.0 Docker Compose
+### Docker Compose
+
 ```bash
 cp .env.example .env
 # edit .env and replace every CHANGE_ME_* value before shared or deployed use
@@ -144,14 +199,14 @@ Generated assets and data:
 - backend image files are stored in the `backend-storage` named volume
 - model weights are expected under `ModelService/models/`
 
-### 6.1 Model Service
+### Model Service
 
 ```powershell
 cd ModelService
 python model_service.py
 ```
 
-### 6.2 Backend
+### Backend
 
 ```powershell
 cd Backend
@@ -160,7 +215,7 @@ cmake --build out\build\x64-debug --config Debug
 .\out\build\x64-debug\Debug\Backend.exe
 ```
 
-### 6.3 Frontend
+### Frontend
 
 ```powershell
 cd ZImageFrontend
@@ -185,7 +240,7 @@ model-service URL to the host gateway and recreate the backend container:
 PYTHON_SERVICE_URL=http://host.docker.internal:8081
 ```
 
-### 6.4 VSCode Workflow
+### VSCode Workflow
 
 If you open the repository root in VSCode, use these commands:
 
@@ -195,7 +250,7 @@ If you open the repository root in VSCode, use these commands:
 - start frontend and model service from the integrated terminal with the commands above
 - local `tasks.json` / `launch.json` can be added per developer if you want one-click run or debugging
 
-### 6.5 Formatting
+### Formatting
 
 Formatting is standardized by:
 
@@ -230,8 +285,9 @@ Required tools:
 - `node` / `npx`
 - `python` plus `black` and `ruff`
 
-### 6.6 CI Baseline
-The repository now includes `.github/workflows/ci.yml` with a lightweight default pipeline:
+### CI Baseline
+
+The repository includes `.github/workflows/ci.yml` with a lightweight default pipeline:
 
 - frontend: `npm ci` + `npm run build`
 - backend: Docker-based Linux build that runs `UnitTests` and `IntegrationTests`
@@ -240,9 +296,9 @@ The repository now includes `.github/workflows/ci.yml` with a lightweight defaul
 
 Heavyweight model-image validation is intentionally split into `.github/workflows/model-service-image.yml`, so the default CI stays stable and reasonably fast.
 
-## 7. Configuration
+## Configuration
 
-### 7.1 Backend
+### Backend
 
 Copy the example config and fill in your local values:
 
@@ -280,7 +336,7 @@ The backend is now container-friendly in two ways:
 - Docker image builds include `/app/config.json` from `Backend/config.json.example`, so the container always has a file-based baseline config
 - `BACKEND_CONFIG_PATH` can point to a mounted config file when you want to override that baseline config
 
-### 7.2 Model Service
+### Model Service
 
 Key environment variables:
 
@@ -298,8 +354,9 @@ Default container-oriented paths now assume:
 - temp files: `./temp`
 - logs: `./logs`
 
-### 7.3 Docker Preparation
-The repository now includes:
+### Docker Preparation
+
+The repository includes:
 - `.env.example` with service-to-service defaults for containers
 - `.env.production.example` as a production-only template with secret placeholders, replica counts, and resource limits
 - `.dockerignore` files at the repository root and per service
@@ -314,9 +371,9 @@ The repository now includes:
 - GitHub Actions CI for frontend build, backend tests, and Docker validation
 - dedicated model-service image workflow for heavyweight runtime image builds
 
-### 7.4 Database Migrations
+### Database Migrations
 
-Versioned database migrations now live under `init-db/migrations/`:
+Versioned database migrations live under `init-db/migrations/`:
 
 - `001_initial_schema.sql`: legacy baseline schema
 - `002_image_generation_task_queue.sql`: task-engine lease, retry, and worker columns plus supporting indexes
@@ -328,7 +385,7 @@ Operational notes:
 - existing databases should be upgraded with `docker compose --profile ops run --rm db-migrate`
 - when adding a new migration file, also fold that change into `init-db/01-schema.sql` and append the new version to its baseline `schema_migrations` insert for fresh installs
 
-### 7.5 Production Compose
+### Production Compose
 
 Recommended production flow:
 
@@ -343,25 +400,18 @@ Notes:
 - `docker-compose.prod.yml` sets CPU and memory limits plus container log rotation defaults
 - `deploy.replicas` values are provided for backend, frontend, and model-service; if your local Compose setup ignores them, use `docker compose up --scale <service>=<count>` with the same env file
 
-## 8. Current State
+## What I'd Do Differently
 
-What is already in place:
+These are conscious trade-offs given the current scope (single-instance deployment, demo-grade load) — open work, not unfinished homework:
 
-- frontend, backend, and model service are connected end to end
-- backend task state is persisted in MySQL
-- frontend supports polling, history, status filtering, cancel, retry, and protected download
-- model service health remains responsive during generation
-- image binaries are no longer required to be eagerly loaded in list responses
-- hard-coded workstation paths and committed plaintext backend credentials have been removed from the repo defaults
+- **HTTP client retry / circuit breaker against ModelService.** Today `GenerationClient` calls the model service directly; a ModelService hiccup propagates straight to the caller. Next iteration: exponential-backoff retry + circuit breaker (probably swapping in `cpr` since Drogon's HTTP client is bare-bones for this use case).
+- **Request-level observability.** Only cache metrics are surfaced today. For production I'd add Prometheus-format exporters for request latency p50/p99, error rate by endpoint, and outbound ModelService call duration — plus distributed tracing (OTel) across the three tiers.
+- **Cache stampede protection at scale.** The plan called for in-process `singleflight` (mutex + `shared_future` per key) to coalesce concurrent misses on the same list key. Skipped because of single-instance assumptions; multi-instance deployment would want Redis `SET NX` as a distributed lock instead.
+- **Backend horizontal scaling.** Worker pool + task queue are already distributable via Redis. WebSocket push isn't — task status broadcasts through an in-process `TaskEventHub`; multi-instance needs Redis pub/sub or a sticky-session strategy.
+- **End-to-end test pipeline.** Unit tests (190 cases) cover business logic; integration tests hit a real MySQL. But there's no Playwright/Cypress-driven full-stack scenario test (create task → poll → final image rendered correctly).
+- **Secrets management.** `.env.production` works for solo deployment but doesn't scale. A real secrets manager (Vault, AWS SSM, etc.) is the next step beyond env vars.
 
-What is not yet finished:
-
-- end-to-end automated tests across all three projects
-- external secrets-manager integration beyond `.env.production`
-- structured observability and metrics
-- stronger request validation and operational runbooks
-
-## 9. Security Notes
+## Security Notes
 
 - do not commit real secrets or production passwords
 - `Backend/config.json` is gitignored — use `Backend/config.json.example` as the template
