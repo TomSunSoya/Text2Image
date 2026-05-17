@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <format>
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
@@ -72,7 +73,7 @@ std::string describeResponse(const minio::s3::Response& response) {
     }
 
     if (response.status_code != 0) {
-        return "http " + std::to_string(response.status_code);
+        return std::format("http {}", response.status_code);
     }
 
     return "unknown error";

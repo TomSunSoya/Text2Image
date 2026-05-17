@@ -3,6 +3,7 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
+#include <format>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -68,8 +69,8 @@ std::string security::hashPassword(const std::string& plain) {
         throw std::runtime_error("PKCS5_PBKDF2_HMAC failed");
     }
 
-    return "pbkdf2_sha256$" + std::to_string(kIterations) + "$" + toHex(salt, kSaltBytes) + "$" +
-           toHex(out, kHashBytes);
+    return std::format("pbkdf2_sha256${}${}${}", kIterations, toHex(salt, kSaltBytes),
+                       toHex(out, kHashBytes));
 }
 
 bool security::verifyPassword(const std::string& plain, const std::string& stored) {

@@ -1,6 +1,7 @@
 #include "services/redis_client.h"
 
 #include <algorithm>
+#include <format>
 #include <ranges>
 #include <tuple>
 
@@ -180,7 +181,7 @@ bool redis::RedisClient::leaseExists(int64_t taskId) {
 redis::RedisClient::~RedisClient() = default;
 
 std::string redis::RedisClient::leaseKey(int64_t taskId) const {
-    return config_.lease_key_prefix + std::to_string(taskId);
+    return std::format("{}{}", config_.lease_key_prefix, taskId);
 }
 
 RedisConfig parseRedisConfig(const nlohmann::json& j) {
