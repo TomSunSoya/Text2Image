@@ -22,6 +22,7 @@ logs/
 # AI coding metadata
 .claude/
 .qoder/
+.sisyphus/
 **/AGENTS.md
 **/agents.md
 **/agent.md
