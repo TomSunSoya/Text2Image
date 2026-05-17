@@ -1,15 +1,10 @@
 #include "database/ImageRepo.h"
 
-#include <algorithm>
 #include <chrono>
-#include <cctype>
-#include <expected>
 #include <format>
-#include <functional>
 #include <mutex>
 #include <stdexcept>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -17,6 +12,7 @@
 #include <spdlog/spdlog.h>
 
 #include "database/db_manager.h"
+#include "database/repo_invoke.h"
 #include "models/failure_code.h"
 #include "utils/chrono_utils.h"
 
@@ -35,75 +31,6 @@ constexpr const char* kColumns =
 constexpr int kColumnCount = 24;
 
 constexpr const char* kImageTable = "image_generations";
-
-class RepoSerializationError : public std::runtime_error {
-  public:
-    using std::runtime_error::runtime_error;
-};
-
-std::string toLowerAscii(std::string value) {
-    std::ranges::transform(value, value.begin(),
-                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return value;
-}
-
-bool containsInsensitive(const std::string& value, const std::string& needle) {
-    return toLowerAscii(value).contains(toLowerAscii(needle));
-}
-
-RepoError::Kind classifyErrorMessage(const std::string& message) {
-    // Configuration faults are not transient — retrying won't help, so map to Internal (500)
-    // rather than DbUnavailable (503).
-    if (containsInsensitive(message, "db not initialized") ||
-        containsInsensitive(message, "database name is empty")) {
-        return RepoError::Kind::Internal;
-    }
-
-    if (containsInsensitive(message, "can't connect") ||
-        containsInsensitive(message, "cannot connect") ||
-        containsInsensitive(message, "connection refused") ||
-        containsInsensitive(message, "lost connection") ||
-        containsInsensitive(message, "server has gone away") ||
-        containsInsensitive(message, "not connected")) {
-        return RepoError::Kind::DbUnavailable;
-    }
-
-    // Narrow constraint-violation matching to phrases MySQL emits specifically for
-    // concurrency-style conflicts. A bare "constraint" would also catch "check constraint
-    // failed" etc., which aren't 409-conflict candidates.
-    if (containsInsensitive(message, "duplicate entry") ||
-        containsInsensitive(message, "foreign key constraint fails")) {
-        return RepoError::Kind::ConstraintViolation;
-    }
-
-    return RepoError::Kind::QueryFailed;
-}
-
-RepoError repoErrorFromMysql(const mysqlx::Error& ex) {
-    const std::string message{ex.what()};
-    return RepoError{classifyErrorMessage(message), message};
-}
-
-RepoError repoErrorFromStdException(const std::exception& ex) {
-    const std::string message{ex.what()};
-    const auto kind = classifyErrorMessage(message);
-    return RepoError{kind == RepoError::Kind::QueryFailed ? RepoError::Kind::Internal : kind,
-                     message};
-}
-
-template <typename Fn> auto repoInvoke(Fn&& fn) -> RepoResult<std::invoke_result_t<Fn>> {
-    try {
-        return std::forward<Fn>(fn)();
-    } catch (const RepoSerializationError& ex) {
-        return std::unexpected(RepoError{RepoError::Kind::Serialization, ex.what()});
-    } catch (const mysqlx::Error& ex) {
-        return std::unexpected(repoErrorFromMysql(ex));
-    } catch (const std::exception& ex) {
-        return std::unexpected(repoErrorFromStdException(ex));
-    } catch (...) {
-        return std::unexpected(RepoError{RepoError::Kind::Internal, "unknown repository error"});
-    }
-}
 
 std::string imageSchemaName() {
     const auto& dbName = database::DBManager::config().database;
@@ -756,9 +683,8 @@ RepoResult<std::optional<models::ImageGeneration>> ImageRepo::cancelByIdAndUserI
             // UPDATE applied but readback found no row — only possible if another writer
             // deleted the row mid-flight. Surface as an internal error instead of nullopt,
             // which the Service layer would otherwise misclassify as 409 conflict.
-            throw std::runtime_error(
-                std::format("cancelByIdAndUserId: updated row vanished, id={}, user_id={}", id,
-                            userId));
+            throw std::runtime_error(std::format(
+                "cancelByIdAndUserId: updated row vanished, id={}, user_id={}", id, userId));
         }
         return rowToImageGeneration(row);
     });

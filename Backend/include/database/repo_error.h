@@ -2,6 +2,7 @@
 
 #include <expected>
 #include <string>
+#include <string_view>
 #include <utility>
 
 struct RepoError {
@@ -21,3 +22,6 @@ struct RepoError {
 };
 
 template <typename T> using RepoResult = std::expected<T, RepoError>;
+
+[[nodiscard]] RepoError makeRepoErrorFromMysqlMessage(std::string_view message);
+[[nodiscard]] RepoError makeRepoErrorFromExceptionMessage(std::string_view message);

@@ -36,3 +36,21 @@ TEST(RepoErrorMapping, InternalMapsToInternalServerError) {
     EXPECT_EQ(error.status, drogon::k500InternalServerError);
     EXPECT_EQ(error.code, "database_internal_error");
 }
+
+TEST(RepoErrorMapping, MysqlMessageClassifiesConnectionFailureAsDbUnavailable) {
+    const auto error = makeRepoErrorFromMysqlMessage("Can't connect to MySQL server");
+
+    EXPECT_EQ(error.kind, RepoError::Kind::DbUnavailable);
+}
+
+TEST(RepoErrorMapping, MysqlMessageClassifiesDuplicateEntryAsConstraintViolation) {
+    const auto error = makeRepoErrorFromMysqlMessage("Duplicate entry 'alice' for key 'username'");
+
+    EXPECT_EQ(error.kind, RepoError::Kind::ConstraintViolation);
+}
+
+TEST(RepoErrorMapping, ConfigurationFaultClassifiesAsInternal) {
+    const auto error = makeRepoErrorFromExceptionMessage("database name is empty");
+
+    EXPECT_EQ(error.kind, RepoError::Kind::Internal);
+}

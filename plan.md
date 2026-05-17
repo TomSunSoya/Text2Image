@@ -1,6 +1,6 @@
 # ZImage Backend 优化计划
 
-> **进度（2026-05-16）：** P0 的 Redis Cache-Aside 收尾完成：PR1–PR5 已落地，PR5 已补 15 个单测并通过 UnitTests。下一步从 item 3（错误处理统一）开始。详见文末 [进度日志](#进度日志-2026-05-16)。
+> **进度（2026-05-17）：** P1 的 item 3（错误处理统一）已落地：`RepoError` / `RepoResult<T>` 抽象 + ImageRepo/UserRepo 全量迁移 + AuthService/ImageService/TaskEngine 同步消费 + `HttpResult::toExpectedBody` 基础设施 + `repoInvoke` 共享 header。UnitTests 180/180 通过。下一步进 item 4（`std::ranges` 替换手写循环）。详见文末 [进度日志](#进度日志-2026-05-17)。
 
 ## 1. MinIO 客户端连接复用 ✅ 已完成 (4cf7f19)
 
@@ -35,9 +35,9 @@
 
 ---
 
-## 3. 统一错误处理模式 — Repo 层迁移到 std::expected ⏳ 未开始
+## 3. 统一错误处理模式 — Repo 层迁移到 std::expected ✅ 已完成
 
-**问题：** 当前存在三种错误模式并存：
+**问题：** 原先存在三种错误模式并存：
 - Service 层：`std::expected<T, ServiceError>`
 - Repo 层：`std::optional<T>` + output param 指针（如 `cancelByIdAndUserId(..., ImageGeneration* updated = nullptr)`）
 - HTTP Client：`HttpResult` struct with error string
@@ -55,6 +55,20 @@
 - 去掉 output param 指针模式（`cancelByIdAndUserId`, `retryByIdAndUserId` 等）
 - `HttpResult` 可保留 struct 形式，但增加 `std::expected` 风格的转换方法
 - Service 层调用方从 `if (!result)` 改为 `if (!result.has_value())` 或直接用 monadic 操作 `.and_then()` / `.transform()`
+
+**落地状态（2026-05-17）：**
+- 新增独立 `RepoError` / `RepoResult<T>`，并由 `mapRepoError()` 统一映射到 `ServiceError`
+- `ImageRepo` / `IImageRepo` / `UserRepo` / `IUserRepo` 已迁移到 `std::expected<T, RepoError>`
+- `cancelByIdAndUserId`、`retryByIdAndUserId` 已改为 `expected<optional<ImageGeneration>, RepoError>`,移除 output param
+- `AuthService`、`ImageService`、`TaskEngine` 已同步处理 Repo 层错误
+- `HttpResult` 保留 struct 形式，并新增 `toExpectedBody()` 转换入口
+- 异常 → `RepoError` 的分类逻辑（`classifyErrorMessage` 等）抽到 `database/repo_error.{h,cpp}`，由 `ImageRepo` / `UserRepo` 共享
+- `RepoSerializationError` + `repoInvoke<Fn>` 模板抽到独立 `database/repo_invoke.h`，两个 Repo 共用一份实现，避免后续新增异常分类时改两处
+- 已补充 RepoError 映射、AuthService Repo 错误注入、HttpResult 转换相关单测
+
+**遗留 / 后续可考虑：**
+- `HttpResult::toExpectedBody()` 目前仅基础设施层有测试覆盖，`GenerationClient` 等真实消费方仍在用旧 `ok()` + `error` 字符串风格，待后续按调用点迁移
+- `HttpError` 仅含 `status_code` + `message`，网络错误统一用 `status_code == 0` 表达；如果未来需要更精细的错误分类（网络 / 超时 / 解析 / BadStatus），可增加 `Kind` enum
 
 ---
 
@@ -351,7 +365,7 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 | P0 | 1. MinIO 连接复用 | ✅ | 真实性能问题，列表页 N 次连接创建 |
 | P0 | 2. 拆分 image_service.cpp | ✅ | 面试高频追问点，展示架构能力 |
 | P0 | 8. Redis Cache-Aside 缓存层 | ✅ | 补齐 Redis 核心用法，面试必问点，工程收益 + 展示价值双高 |
-| P1 | 3. 统一错误处理 | ⏳ | 一致性问题，面试容易被问 |
+| P1 | 3. 统一错误处理 | ✅ | 一致性问题，面试容易被问 |
 | P1 | 4. std::ranges 替换循环 | ⏳ | 最直观的 C++23 升级展示 |
 | P2 | 5. std::to_string → std::format | ⏳ | 风格统一，改动小 |
 | P2 | 6. std::string_view | ⏳ | 性能微优化，需逐个判断兼容性 |
@@ -410,3 +424,63 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 - ImageService cache 注入点：`Backend/src/services/image_service.cpp` `defaultCacheClient()` + `setDefaultCache`
 - TaskEngine cache 注入点：`Backend/src/services/task_engine.cpp` `Impl::cache` + `invalidateAllForTask`
 - 测试 fakes：`Backend/tests/unit/image_service_test_fakes.h`
+
+---
+
+## 进度日志 (2026-05-17)
+
+### 本会话期间完成
+
+**Item 3 — 错误处理统一** ✅ 已完成（一次会话内推进完 PR-A / PR-B / PR-C 三步）
+
+PR-A（ImageRepo 主体迁移）✅ 已 commit `03444d8`：
+- 新增 `Backend/include/database/repo_error.h` —— `RepoError { Kind, message }` + `RepoResult<T> = std::expected<T, RepoError>`
+- 新增 `Backend/include/services/repo_error_mapper.h` + `repo_error_mapper.cpp` —— `mapRepoError(RepoError) → ServiceError`，5 个 Kind 集中映射
+- `IImageRepo` / `ImageRepo` 全部方法迁移到 `RepoResult<T>`；`cancelByIdAndUserId` / `retryByIdAndUserId` 干掉 output param，返回 `expected<optional<ImageGeneration>, RepoError>`
+- Service 层"两层判断"消费风格：外层 `if (!result) return mapRepoError(...)`，内层 `if (!*result) return ServiceError{...}`
+- `TaskEngine` 用 `logRepoError` 记录但不调用 `mapRepoError`（无 HTTP 边界）
+- Fakes 加 `next_error` 故障注入字段，单测覆盖 DbUnavailable→503 等故障路径
+
+PR-B（UserRepo + AuthService）✅ 工作树未 commit：
+- 新增 `Backend/include/database/i_user_repo.h`，AuthService 通过 `shared_ptr<IUserRepo>` 注入
+- UserRepo 全部方法迁移到 `RepoResult<T>`
+- AuthService 加 null repo 检查 + `RejectsNullRepoDependency` 单测
+- 新增 `test_auth_service_repo_errors.cpp` — register / login 故障注入用例
+
+PR-C（HttpResult 渐进式改造）✅ 工作树未 commit：
+- 新增 `HttpError { status_code, message }` struct
+- 新增 `HttpResult::toExpectedBody() → std::expected<std::string, HttpError>` 转换方法
+- **保留旧 `HttpResult` struct + `ok()` API**，让 `GenerationClient` 可逐步迁移而不破坏现有调用方
+- 新增 `test_http_result.cpp` 3 个用例覆盖 success / network error / bad status 三条路径
+- ⚠ 当前 `GenerationClient` 仍用旧 API，`toExpectedBody` 暂无生产消费方——按调用点逐步迁移
+
+健壮性紧固（本会话内修复）：
+- `classifyErrorMessage`：把"配置类"错误（"db not initialized" / "database name is empty"）从 `DbUnavailable`(503) 移到 `Internal`(500)，因为重试无效
+- `classifyErrorMessage`：ConstraintViolation 关键词从 `"constraint"` / `"foreign key"` 收紧到 `"duplicate entry"` / `"foreign key constraint fails"`，避免误伤"check constraint failed"等
+- `cancelByIdAndUserId` / `retryByIdAndUserId`：UPDATE 生效但回读 SELECT 返 0 行（极端并发：被并发 DELETE）→ `throw std::runtime_error` 让 `repoInvoke` 映射为 `Internal`(500)，不再被 Service 误判为 409 conflict
+- `classifyErrorMessage` + `makeRepoErrorFromMysqlMessage` / `makeRepoErrorFromExceptionMessage` 从 `ImageRepo.cpp` anonymous namespace 提到独立 `database/repo_error.{h,cpp}`，让 `ImageRepo` / `UserRepo` 共享一份分类逻辑
+- `RepoSerializationError` 类型 + `repoInvoke<Fn>` 模板从 `ImageRepo.cpp` / `UserRepo.cpp` 两份重复副本提到 `database/repo_invoke.h`，未来新增异常分类只需改一处
+
+测试增量：171 → 180 用例（+3 HttpResult / +3 RepoError 分类 / +2 AuthService 故障注入 / +1 null repo 拒绝）
+
+### 顺手踩的坑
+
+- `repo_error.cpp` / `repo_invoke.h` 加入后，CMake `GLOB_RECURSE` + `CONFIGURE_DEPENDS` 第一次 build 会触发 reconfigure 但 vcxproj 尚未更新源文件列表，导致链接 LNK2019。**重跑一次 build 即可**——和 PR4 踩过的坑同源
+- `repoInvoke` 模板需要看到 `mysqlx::Error` 完整类型才能 catch，所以 `repo_invoke.h` 必须 include `<mysqlx/xdevapi.h>`。**故意不放到 `repo_error.h`**——后者被 `i_image_repo.h` / `i_user_repo.h` 等接口头文件 include，不应间接拉 mysqlx 依赖
+
+### 下一次会话从这里继续
+
+**Step 1：提交工作树（PR-B + PR-C + 健壮性紧固 + repoInvoke dedup）**，建议拆 2 个 commit：
+- `refactor(repo): extract UserRepo behind IUserRepo and migrate to std::expected` （含 AuthService 改造、test_auth_service_repo_errors）
+- `refactor(http): add HttpResult::toExpectedBody for std::expected interop` + `refactor(repo): share repoInvoke and error classification across repos` （可单独或合并）
+
+**Step 2：开始 item 4（std::ranges 替换手写循环）**，最直观的 C++23 升级展示。涉及位置见 item 4 表格。
+
+### 关键文件指引（item 3 后新增）
+
+- RepoError / RepoResult 抽象：`Backend/include/database/repo_error.h`
+- 错误分类逻辑：`Backend/src/database/repo_error.cpp`（`classifyErrorMessage` + `makeRepoErrorFrom*Message`）
+- `repoInvoke` + `RepoSerializationError`：`Backend/include/database/repo_invoke.h`（两个 Repo 共享）
+- Repo → Service 错误映射：`Backend/include/services/repo_error_mapper.h` + 实现
+- IUserRepo / UserRepo：`Backend/include/database/i_user_repo.h` + `UserRepo.cpp`
+- HttpResult expected 转换：`Backend/include/services/i_http_client.h` 的 `toExpectedBody`
