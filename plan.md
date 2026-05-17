@@ -1,6 +1,6 @@
 # ZImage Backend 优化计划
 
-> **进度（2026-05-17）：** P1 的 item 3（错误处理统一）已落地：`RepoError` / `RepoResult<T>` 抽象 + ImageRepo/UserRepo 全量迁移 + AuthService/ImageService/TaskEngine 同步消费 + `HttpResult::toExpectedBody` 基础设施 + `repoInvoke` 共享 header。UnitTests 180/180 通过。下一步进 item 4（`std::ranges` 替换手写循环）。详见文末 [进度日志](#进度日志-2026-05-17)。
+> **进度（2026-05-17）：** P1 + P2 全部完成。最终单测 190 个用例全过。详见文末 [进度日志](#进度日志-2026-05-17)。
 
 ## 1. MinIO 客户端连接复用 ✅ 已完成 (4cf7f19)
 
@@ -72,22 +72,26 @@
 
 ---
 
-## 4. C++23 std::ranges 替换手写循环 ⏳ 未开始
+## 4. C++23 std::ranges 替换手写循环 ✅ 已完成
 
 **问题：** 多处手写 for 循环做 transform/filter 操作，可用 `std::ranges` 表达更简洁。
 
 **涉及文件及具体位置：**
 
-| 文件 | 位置 | 当前写法 | ranges 替换 |
-|------|------|---------|------------|
-| `image_controller.cpp:28-31` | `toListJson` | for 循环 push_back `item.toJson()` | `std::views::transform` |
-| `redis_client.cpp:73-77` | `rebuildTaskQueue` | for 循环 push_back `std::to_string(taskId)` | `std::views::transform` |
-| `image_service.cpp:614-635` | `presignListImages` | for 循环逐个 presign | `std::ranges::for_each` + filter |
-| `image_service.cpp:236-239` | `toLower` | `std::transform` with lambda | `std::ranges::transform` |
+| 文件 | 位置 | 当前写法 | ranges 替换 | 落地状态 |
+|------|------|---------|------------|----------|
+| `image_controller.cpp` | `toListJson` | for 循环 push_back `item.toJson()` | `std::views::transform(&ImageGeneration::toJson)` | ✅ item 2 拆分时顺手改 |
+| `redis_client.cpp` | `rebuildTaskQueue` | for 循环 push_back `std::to_string(taskId)` | `views::transform | ranges::to<vector<string>>` | ✅ commit `c75d106` |
+| `image_service.cpp` | `presignListImagesInPlace` | for 循环逐个 presign | `for (auto& img : images | std::views::filter(...))` | ✅ item 2 拆分时顺手改 |
+| `image_service.cpp`(→`generation_client.cpp:37`) | `toLower` | `std::transform` with lambda | `std::ranges::transform` | ✅ item 2 拆分时顺手改 |
+
+**额外覆盖（本次会话）：**
+- `image_service.cpp::writeListCache` — sanitize 循环 → `views::transform | ranges::to<vector<json>>`
+- `string_utils.cpp::parseBool` — filter+lower 循环 → `views::filter | views::transform | ranges::to<string>`
 
 ---
 
-## 5. 残留 std::to_string → std::format 统一 ⏳ 未开始
+## 5. 残留 std::to_string → std::format 统一 ✅ 已完成
 
 **问题：** 项目大部分地方已用 `std::format`，但仍有十余处使用 `std::to_string`，风格不一致。
 
@@ -96,11 +100,17 @@
 - `Backend/src/services/minio_client.cpp:25` — `std::to_string(response.status_code)`
 - `Backend/src/database/ImageRepo.cpp` — 可能有零散使用
 
-**方案：** 全局搜索 `std::to_string` 替换为 `std::format("{}", value)`。对于 Redis 拼接场景，`std::format` 可读性更好。
+**方案：** 只迁移字符串拼接场景，纯数字转换继续保留 `std::to_string`，避免把简单传参改成更啰嗦的 `std::format("{}", value)`。
+
+**落地状态（2026-05-17）：**
+- `MinioClient::describeResponse` 的 HTTP fallback 改为 `std::format("http {}", status_code)`
+- `RedisClient::leaseKey` 改为 `std::format("{}{}", lease_key_prefix, taskId)`
+- `security::hashPassword` 的 PBKDF2 hash 串改为 `std::format`
+- `lpush` / `bumpVersion` / `getVersion` 等纯转换调用保持 `std::to_string`
 
 ---
 
-## 6. 扩大 std::string_view 使用范围 ⏳ 未开始
+## 6. 扩大 std::string_view 使用范围 ✅ 已完成
 
 **问题：** 多处函数参数用 `const std::string&` 但只读不存储，可以改 `std::string_view` 减少不必要的拷贝和临时对象构造。
 
@@ -111,15 +121,23 @@
 
 **注意：** 如果函数内部需要将参数传给接受 `const std::string&` 的第三方 API（如 mysqlx bind），则不适合改为 `string_view`，需逐个判断。
 
+**落地状态（2026-05-17）：**
+- `ImageService::listMyByStatus` 的 `status` 改为 `std::string_view`，直接下放给 `normalizeTaskStatus`
+- `ImageService::writeToCache` / `writeListCache` 的 `key` 改为 `std::string_view`，透传给 cache `setex`
+- `IImageStorage::contentTypeForKey` 及实现/fake 改为 `std::string_view`，只读 `ends_with`
+- Repo / MinIO / Drogon / JWT / PBKDF2 边界继续保留 `const std::string&`，避免为了兼容第三方 API 反向构造 `std::string`
+
 ---
 
-## 7. Controller 样板代码消除 ⏳ 未开始
+## 7. Controller 样板代码消除 ✅ 已完成
 
 **问题：** `image_controller.cpp` 每个 handler 都重复：创建 resp → setContentType → resolveUserId → new ImageService → 调方法 → 错误/成功处理 → callback。
 
 **涉及文件：**
 - `Backend/src/controllers/image_controller.cpp`
 - `Backend/include/controllers/image_controller.h`
+- `Backend/include/controllers/handler_utils.h`
+- `Backend/src/controllers/handler_utils.cpp`
 
 **方案：** 抽取模板辅助函数：
 
@@ -142,6 +160,14 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 ```
 
 各 handler 简化为 1-3 行调用。
+
+**落地状态（2026-05-17）：**
+- 新增 `controllers::runJsonHandler`，统一 JSON 响应创建、parse_error / std exception 捕获和 callback
+- 新增 `controllers::runAuthenticatedJson`，复用 `resolveUserId` 做认证短路
+- 新增 `controllers::respondFromExpected`，统一 `std::expected<T, ServiceError>` 到 HTTP 响应
+- `ImageController` 10 个 handler 与 `AuthController::registerUser/login` 已迁移
+- `MetricsController::getCacheMetrics` 保持原样，因为 admin role guard 目前只有一个调用点，暂不为单点抽象 admin guard
+- 新增 `test_handler_utils.cpp` 4 个用例覆盖成功、失败、void 成功和 JSON parse_error 路径
 
 ---
 
@@ -366,10 +392,10 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 | P0 | 2. 拆分 image_service.cpp | ✅ | 面试高频追问点，展示架构能力 |
 | P0 | 8. Redis Cache-Aside 缓存层 | ✅ | 补齐 Redis 核心用法，面试必问点，工程收益 + 展示价值双高 |
 | P1 | 3. 统一错误处理 | ✅ | 一致性问题，面试容易被问 |
-| P1 | 4. std::ranges 替换循环 | ⏳ | 最直观的 C++23 升级展示 |
-| P2 | 5. std::to_string → std::format | ⏳ | 风格统一，改动小 |
-| P2 | 6. std::string_view | ⏳ | 性能微优化，需逐个判断兼容性 |
-| P2 | 7. Controller 样板消除 | ⏳ | 代码整洁度，非阻塞 |
+| P1 | 4. std::ranges 替换循环 | ✅ | 最直观的 C++23 升级展示 |
+| P2 | 5. std::to_string → std::format | ✅ | 风格统一，改动小 |
+| P2 | 6. std::string_view | ✅ | 性能微优化，需逐个判断兼容性 |
+| P2 | 7. Controller 样板消除 | ✅ | 代码整洁度，非阻塞 |
 
 ---
 
@@ -468,15 +494,44 @@ PR-C（HttpResult 渐进式改造）✅ 工作树未 commit：
 - `repo_error.cpp` / `repo_invoke.h` 加入后，CMake `GLOB_RECURSE` + `CONFIGURE_DEPENDS` 第一次 build 会触发 reconfigure 但 vcxproj 尚未更新源文件列表，导致链接 LNK2019。**重跑一次 build 即可**——和 PR4 踩过的坑同源
 - `repoInvoke` 模板需要看到 `mysqlx::Error` 完整类型才能 catch，所以 `repo_invoke.h` 必须 include `<mysqlx/xdevapi.h>`。**故意不放到 `repo_error.h`**——后者被 `i_image_repo.h` / `i_user_repo.h` 等接口头文件 include，不应间接拉 mysqlx 依赖
 
+### 本会话期间完成（续）
+
+**Item 4 — std::ranges 替换手写循环** ✅ 已完成（commit `c75d106` + item 2 拆分时已顺手处理的若干位置）
+
+复盘 plan 表格里四个位置：
+- `image_controller.cpp::toListJson` — 早先 PR 已用 `std::views::transform(&ImageGeneration::toJson)`
+- `image_service.cpp::presignListImagesInPlace` — item 2 拆分时已用 `views::filter`
+- `image_service.cpp::toLower`（迁到 `generation_client.cpp:37`）— 已用 `std::ranges::transform`
+- `redis_client.cpp::rebuildTaskQueue` — **本次会话** `views::transform | ranges::to<vector<string>>`
+
+本次会话额外迁移：
+- `image_service.cpp::writeListCache` 的 sanitize 循环 → `views::transform | ranges::to<vector<json>>`，`j["content"] = nlohmann::json(std::move(content))`
+- `string_utils.cpp::parseBool` 的 filter+lower 循环 → `views::filter | views::transform | ranges::to<string>`；lambdas 用 `unsigned char` 参数，规避 `std::isspace(char)` / `std::tolower(char)` 对 UTF-8 高位字节的 UB
+
+测试增量：180 → 186 用例（+3 `ImageServiceRangesSanitization` / +3 `RedisClientRanges`）
+
+**易踩的小坑（本次留意到）：**
+- `parseBool` 里 view chain 引用按值传入的局部 `value`，必须在函数返回前用 `ranges::to<string>` 物化掉，不能直接把 view 作为返回值
+- `nlohmann::json` 隐式支持 `std::vector<json>` → JSON array 的转换，所以 `j["content"] = std::move(content)` 也可，外层 `nlohmann::json(...)` 包装属于显式风格选择
+- `RedisClientRanges` 测试现在测的是"transform pattern 本身"的等价性，而不是 `RedisClient::rebuildTaskQueue` 整体行为（后者要 mock `sw::redis::Redis` 才能写）—— 留作回归探针
+
+### 本会话期间完成（续）
+
+**P2 — item 5 / 6 / 7** ✅ 全部完成（commits `65e2523` / `65722af` / `df3776f`）
+
+Item 5 只改拼接场景：`MinioClient::describeResponse`、`RedisClient::leaseKey`、`security::hashPassword`。`lpush` / `bumpVersion` / `getVersion` 等纯转换位点继续保留 `std::to_string`，因为改成 `std::format("{}", x)` 没有可读性收益。
+
+Item 6 只迁移无第三方 API 边界、无反向构造成本的只读参数：`ImageService::listMyByStatus(status)`、`writeToCache(key)`、`writeListCache(key)`、`IImageStorage::contentTypeForKey(storageKey)`。Repo 的 mysqlx bind、MinIO/Drogon/JWT/PBKDF2 透传参数保持 `const std::string&`。
+
+Item 7 新增 `controllers/handler_utils.{h,cpp}`，集中 JSON handler envelope、认证短路和 expected→response 映射；`ImageController` 与 `AuthController` 已迁移。`MetricsController` 保持原样，理由是 admin role guard 目前只有一个调用点，抽 guard 会早于真实复用需求。
+
+测试增量：186 → 190 用例（+4 `HandlerUtils`）。最终 `unit_tests.exe` 190/190 通过。新增文件触发的首次 LNK2019 属于 CMake `GLOB_RECURSE` + vcxproj 刷新已知现象，重跑 build 后通过。
+
 ### 下一次会话从这里继续
 
-**Step 1：提交工作树（PR-B + PR-C + 健壮性紧固 + repoInvoke dedup）**，建议拆 2 个 commit：
-- `refactor(repo): extract UserRepo behind IUserRepo and migrate to std::expected` （含 AuthService 改造、test_auth_service_repo_errors）
-- `refactor(http): add HttpResult::toExpectedBody for std::expected interop` + `refactor(repo): share repoInvoke and error classification across repos` （可单独或合并）
+P2 已闭环。下一步可从新的 P3/部署验证/性能压测中选一条，不再有 P2 残留项。
 
-**Step 2：开始 item 4（std::ranges 替换手写循环）**，最直观的 C++23 升级展示。涉及位置见 item 4 表格。
-
-### 关键文件指引（item 3 后新增）
+### 关键文件指引（item 3 / item 4 后新增）
 
 - RepoError / RepoResult 抽象：`Backend/include/database/repo_error.h`
 - 错误分类逻辑：`Backend/src/database/repo_error.cpp`（`classifyErrorMessage` + `makeRepoErrorFrom*Message`）
@@ -484,3 +539,5 @@ PR-C（HttpResult 渐进式改造）✅ 工作树未 commit：
 - Repo → Service 错误映射：`Backend/include/services/repo_error_mapper.h` + 实现
 - IUserRepo / UserRepo：`Backend/include/database/i_user_repo.h` + `UserRepo.cpp`
 - HttpResult expected 转换：`Backend/include/services/i_http_client.h` 的 `toExpectedBody`
+- std::ranges 集中观察点：`redis_client.cpp::rebuildTaskQueue` / `image_service.cpp::writeListCache` / `string_utils.cpp::parseBool` / `generation_client.cpp::toLower` / `image_controller.cpp::toListJson` / `image_service.cpp::presignListImagesInPlace`
+- Controller handler helper：`Backend/include/controllers/handler_utils.h` / `Backend/src/controllers/handler_utils.cpp`
