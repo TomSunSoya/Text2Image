@@ -349,7 +349,7 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 
 ---
 
-**PR4 — presigned URL 缓存** ✅ 已完成（已提交，commit hash 待补）
+**PR4 — presigned URL 缓存** ✅ 已完成 (f5725f9)
 
 *内容：* 在 `ImageService::getById` 和 `presignListImages` 中调用 `storage.presignUrl(storage_key)` 的位置加一层缓存；key 按 `storage_key` 哈希，TTL 取 MinIO presigned URL TTL 的 80%。
 
