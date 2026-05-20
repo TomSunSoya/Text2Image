@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <format>
+#include <iterator>
 #include <ranges>
 #include <tuple>
 
@@ -14,7 +15,7 @@ struct redis::RedisClient::Impl {
 
     explicit Impl(const RedisConfig& cfg) : redis(buildOpts(cfg), buildPoolOpts(cfg)) {}
 
-private:
+  private:
     static sw::redis::ConnectionOptions buildOpts(const RedisConfig& cfg) {
         sw::redis::ConnectionOptions opts;
         opts.host = cfg.host;
@@ -60,7 +61,7 @@ void redis::RedisClient::enqueueTask(int64_t taskId) {
         impl_->redis.lpush(config_.task_queue_key, std::to_string(taskId));
     } catch (sw::redis::Error& e) {
         spdlog::warn("Redis enqueueTask failed: {}", e.what());
-        throw;      // down to sql
+        throw; // down to sql
     }
 }
 
@@ -73,15 +74,16 @@ void redis::RedisClient::rebuildTaskQueue(const std::vector<int64_t>& taskIds) {
         return #ARGV
     )";
 
-    auto args = taskIds
-        | std::views::transform([](int64_t id) { return std::to_string(id); })
-        | std::ranges::to<std::vector<std::string>>();
+    std::vector<std::string> args;
+    args.reserve(taskIds.size());
+    std::ranges::transform(taskIds, std::back_inserter(args),
+                           [](int64_t id) { return std::to_string(id); });
 
     const std::vector<std::string> keys{config_.task_queue_key};
 
     try {
-        std::ignore = impl_->redis.eval<long long>(
-            script, keys.begin(), keys.end(), args.begin(), args.end());
+        std::ignore = impl_->redis.eval<long long>(script, keys.begin(), keys.end(), args.begin(),
+                                                   args.end());
     } catch (const sw::redis::Error& e) {
         spdlog::warn("Redis rebuildTaskQueue failed: {}", e.what());
         throw;
@@ -135,9 +137,9 @@ bool redis::RedisClient::renewLease(int64_t taskId, const std::string& workerId,
       )";
     try {
         const auto result = impl_->redis.eval<long long>(script, {leaseKey(taskId)},
-                                                   {workerId, std::to_string(leaseSeconds)});
+                                                         {workerId, std::to_string(leaseSeconds)});
         return result == 1;
-    } catch (sw::redis::Error &e) {
+    } catch (sw::redis::Error& e) {
         spdlog::warn("Redis renewLease failed: {}", e.what());
         return false;
     }
@@ -157,13 +159,12 @@ bool redis::RedisClient::releaseLease(int64_t taskId, const std::string& workerI
         spdlog::warn("Redis releaseLease failed: {}", e.what());
         return false;
     }
-
 }
 
 bool redis::RedisClient::forceReleaseLease(int64_t taskId) {
     try {
         return impl_->redis.del(leaseKey(taskId)) > 0;
-    } catch (sw::redis::Error &e) {
+    } catch (sw::redis::Error& e) {
         spdlog::warn("Redis forceReleaseLease failed: {}", e.what());
         return false;
     }

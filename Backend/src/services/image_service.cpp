@@ -1,8 +1,10 @@
 #include "services/image_service.h"
 
 #include <cctype>
+#include <algorithm>
 #include <chrono>
 #include <format>
+#include <iterator>
 #include <optional>
 #include <random>
 #include <ranges>
@@ -155,13 +157,14 @@ void ImageService::writeListCache(std::string_view key, const ImageListResult& r
     try {
         nlohmann::json j;
         j["total_elements"] = result.total_elements;
-        auto content = result.content | std::views::transform([](const auto& img) {
-                           auto sanitized = img;
-                           sanitized.image_bytes.clear();
-                           sanitized.image_url.clear();
-                           return sanitized.toJson();
-                       }) |
-                       std::ranges::to<std::vector<nlohmann::json>>();
+        std::vector<nlohmann::json> content;
+        content.reserve(result.content.size());
+        std::ranges::transform(result.content, std::back_inserter(content), [](const auto& img) {
+            auto sanitized = img;
+            sanitized.image_bytes.clear();
+            sanitized.image_url.clear();
+            return sanitized.toJson();
+        });
         j["content"] = nlohmann::json(std::move(content));
         cache_->setex(key, j.dump(), image_cache::listTtlWithJitter());
     } catch (const std::exception& ex) {
