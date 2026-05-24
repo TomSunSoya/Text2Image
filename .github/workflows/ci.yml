@@ -80,11 +80,21 @@ jobs:
             --character-set-server=utf8mb4 \
             --collation-server=utf8mb4_unicode_ci
 
-      - name: Wait for MySQL health
+      - name: Wait for MySQL and X Protocol readiness
         run: |
           for i in $(seq 1 60); do
             status=$(docker inspect --format='{{.State.Health.Status}}' zimage-mysql-ci)
             if [ "$status" = "healthy" ]; then
+              break
+            fi
+            sleep 2
+          done
+          if [ "$status" != "healthy" ]; then
+            docker logs zimage-mysql-ci
+            exit 1
+          fi
+          for i in $(seq 1 60); do
+            if timeout 1 bash -c '</dev/tcp/127.0.0.1/33060' 2>/dev/null; then
               exit 0
             fi
             sleep 2
@@ -99,7 +109,7 @@ jobs:
             -e TEST_DB_PORT=33060 \
             -e TEST_DB_USERNAME=root \
             -e TEST_DB_PASSWORD=CHANGE_ME_ROOT \
-            -e TEST_DB_SSL=true \
+            -e TEST_DB_SSL=false \
             -e JWT_SECRET=ci-jwt-secret \
             zimage-backend-unit-tests \
             ctest --test-dir /src/build --output-on-failure -R IntegrationTests
