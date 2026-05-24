@@ -3,6 +3,9 @@ import { useAuthStore } from '@/stores/auth';
 import Login from '@/views/Login.vue';
 import Register from '@/views/Register.vue';
 import Home from '@/views/Home.vue';
+import Profile from '@/views/Profile.vue';
+import Admin from '@/views/Admin.vue';
+import NotFound from '@/views/NotFound.vue';
 
 const routes = [
   {
@@ -24,8 +27,27 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/profile',
+    name: 'Profile',
+    component: Profile,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/admin',
+    name: 'Admin',
+    component: Admin,
+    meta: { requiresAuth: true, requiresAdmin: true },
+  },
+  {
+    path: '/403',
+    name: 'Forbidden',
+    component: NotFound,
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/:pathMatch(.*)*',
-    redirect: '/',
+    name: 'NotFound',
+    component: NotFound,
   },
 ];
 
@@ -39,7 +61,11 @@ router.beforeEach((to, from, next) => {
   const authStore = useAuthStore();
   const isAuthenticated = authStore.checkAuth();
 
-  // 需要认证的页面
+  if (to.meta.requiresAdmin && !authStore.isAdmin) {
+    next('/403');
+    return;
+  }
+
   if (to.meta.requiresAuth) {
     if (!isAuthenticated) {
       // 未登录，跳转到登录页

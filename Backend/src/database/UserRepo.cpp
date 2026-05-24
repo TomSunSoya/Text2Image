@@ -112,3 +112,15 @@ RepoResult<int64_t> UserRepo::insert(const models::User& user) {
         return static_cast<int64_t>(res.getAutoIncrementValue());
     });
 }
+
+RepoResult<bool> UserRepo::updatePassword(int64_t id, const std::string& passwordHash) {
+    return repoInvoke([&] {
+        auto result = usersTable()
+                          .update()
+                          .set("password", passwordHash)
+                          .where("id = :id")
+                          .bind("id", id)
+                          .execute();
+        return result.getAffectedItemsCount() > 0;
+    });
+}

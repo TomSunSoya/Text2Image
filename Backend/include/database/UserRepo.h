@@ -17,4 +17,6 @@ class UserRepo : public IUserRepo {
     [[nodiscard]] RepoResult<bool> existsByEmail(const std::string& email) override;
 
     [[nodiscard]] RepoResult<int64_t> insert(const models::User& user) override;
+    [[nodiscard]] RepoResult<bool> updatePassword(int64_t id,
+                                                  const std::string& passwordHash) override;
 };

@@ -21,4 +21,6 @@ class IUserRepo {
     [[nodiscard]] virtual RepoResult<bool> existsByEmail(const std::string& email) = 0;
 
     [[nodiscard]] virtual RepoResult<int64_t> insert(const models::User& user) = 0;
+    [[nodiscard]] virtual RepoResult<bool> updatePassword(int64_t id,
+                                                          const std::string& passwordHash) = 0;
 };

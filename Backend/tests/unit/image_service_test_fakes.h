@@ -116,6 +116,7 @@ class FakeImageRepo : public IImageRepo {
     int delete_calls{0};
     int cancel_calls{0};
     int retry_calls{0};
+    int count_active_calls{0};
 
     RepoResult<int64_t> insert(const models::ImageGeneration& generation) override {
         if (auto error = consumeError()) {
@@ -188,6 +189,26 @@ class FakeImageRepo : public IImageRepo {
             }
         }
         return std::nullopt;
+    }
+
+    RepoResult<int64_t> countActiveTasksByUserId(int64_t userId) override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+
+        ++count_active_calls;
+        int64_t count = 0;
+        for (const auto& [key, image] : images) {
+            if (key.second != userId) {
+                continue;
+            }
+            if (image.status == models::TaskStatus::Queued ||
+                image.status == models::TaskStatus::Pending ||
+                image.status == models::TaskStatus::Generating) {
+                ++count;
+            }
+        }
+        return count;
     }
 
     RepoResult<bool> deleteByIdAndUserId(int64_t id, int64_t userId) override {

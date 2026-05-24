@@ -98,8 +98,12 @@ Repo 层返回 `std::expected<T, RepoError>`，`RepoError::Kind` 分类为 `DbUn
 ### 鉴权
 
 - `POST /api/auth/register`
-- `POST /api/auth/login`
-- 鉴权 API 使用 `Authorization: Bearer <token>`
+- `POST /api/auth/login` — 返回 `access_token`、`refresh_token` 与 `expires_in`（默认 900 秒）
+- `POST /api/auth/refresh` — rotate refresh token，并返回新的 token pair
+- `POST /api/auth/logout` — 撤销提交的 refresh token
+- `GET /api/auth/me` — 当前用户资料
+- `PUT /api/auth/password` — 修改密码，并撤销该用户所有 refresh token
+- 鉴权 API 使用 `Authorization: Bearer <access_token>`
 - 用户有 `role` 字段；通过 SQL 提升初始 admin：
   ```sql
   UPDATE users SET role = 'admin' WHERE username = '<your_username>';
@@ -123,9 +127,11 @@ Repo 层返回 `std::expected<T, RepoError>`，`RepoError::Kind` 分类为 `DbUn
 - `GET /health` — 后端 liveness
 - `GET /api/images/health` — 后端代理的模型服务健康
 - `GET http://<model-service-host>:8081/health` — 模型服务直查
+- `GET /metrics` — Backend Prometheus 文本指标，覆盖请求延迟、任务状态迁移、队列深度、DB gauge、ModelService 出站调用
 - `GET /api/metrics/cache` — admin 专属，按 namespace 输出缓存 hit/miss/degraded 计数
+- `GET http://<model-service-host>:8081/metrics` — ModelService Prometheus 指标，覆盖健康状态、生成耗时、活跃任务和 GPU 显存
 
-`ModelService` 健康状态：`healthy`（已加载、空闲）/ `busy`（已加载、生成中）/ `loading`（进程存活、模型加载中）/ `unhealthy`（不可用）。健康响应还包含 `active_kind`（`none / generate / edit`），让后端避开正在执行的任务类型。
+`ModelService` 健康状态：`healthy`（已加载、空闲）/ `busy`（已加载、生成中）/ `loading`（进程存活、模型加载中）/ `unhealthy`（不可用或超过 `MODEL_SERVICE_BUSY_UNHEALTHY_SECONDS` 仍未结束）。健康响应还包含 `active_kind`（`none / generate / edit`）和活跃任务计数，让后端主动退避，不再持有 worker lease 等到超时。
 
 ## 仓库结构
 
@@ -288,7 +294,7 @@ bash ./scripts/format.sh check
 
 - frontend：`npm ci` + `npm run build`
 - backend：基于 Docker 的 Linux 构建，跑 `UnitTests` 和 `IntegrationTests`
-- model service：Python entrypoint 编译 smoke check
+- model service：Python entrypoint 编译 smoke check + mock 后的 FastAPI pytest 测试
 - docker：`docker compose config` + `Backend/` 和 `ZImageFrontend/` 的运行时镜像构建
 
 重量级的模型镜像验证拆到独立的 `.github/workflows/model-service-image.yml`，让默认 CI 稳定且足够快。
@@ -312,22 +318,32 @@ cp Backend/config.json.example Backend/config.json
 
 - `server`：host、port、线程数
 - `database`：MySQL 连接、可选 SSL、连接池
-- `jwt`：secret 和 token 过期时间
+- `jwt`：secret、access token TTL、refresh token TTL
 - `python_service`：模型服务 URL、执行超时
 - `task_engine`：worker 数、轮询、lease、重试策略
+- `cors`：允许访问 Backend API 的浏览器来源
 - `redis`：队列协调、lease key、超时、启用开关
+- `rate_limit`：Redis token bucket 限流和活跃任务配额
 - `storage`：本地图片存储
 
 后端支持以下环境变量覆盖：
 
 - `BACKEND_PORT`
 - `DB_HOST` `DB_PORT` `DB_USERNAME` `DB_PASSWORD` `DB_NAME` `DB_SSL`
-- `JWT_SECRET`
+- `CORS_ENABLED` `CORS_ALLOW_ORIGINS`
+- `JWT_SECRET` `JWT_ACCESS_EXPIRATION_MINUTES` `JWT_REFRESH_EXPIRATION_DAYS`
 - `PYTHON_SERVICE_URL` `PYTHON_SERVICE_TIMEOUT_SECONDS`
 - `REDIS_ENABLED` `REDIS_HOST` `REDIS_PORT` `REDIS_PASSWORD` `REDIS_DB`
 - `REDIS_POOL_SIZE` `REDIS_CONNECT_TIMEOUT_MS` `REDIS_SOCKET_TIMEOUT_MS`
 - `REDIS_TASK_QUEUE_KEY` `REDIS_LEASE_KEY_PREFIX`
+- `RATE_LIMIT_ENABLED` `RATE_LIMIT_FAIL_OPEN` `RATE_LIMIT_MAX_ACTIVE_TASKS_PER_USER`
+- `RATE_LIMIT_USER_CREATE_CAPACITY` `RATE_LIMIT_USER_CREATE_WINDOW_SECONDS`
+- `RATE_LIMIT_AUTH_IP_CAPACITY` `RATE_LIMIT_AUTH_IP_WINDOW_SECONDS` `RATE_LIMIT_KEY_PREFIX`
 - `STORAGE_ROOT_DIR` `STORAGE_PUBLIC_URL_PREFIX` `STORAGE_EXTENSION`
+
+如果设置了文件型 secret 变量，后端会优先读取：
+`DB_PASSWORD_FILE`、`JWT_SECRET_FILE`、`REDIS_PASSWORD_FILE`、`CACHE_PASSWORD_FILE`、
+`MINIO_SECRET_KEY_FILE`。文件不存在或为空时，启动会给出包含变量名和路径的明确错误。
 
 后端的容器友好性体现在两点：
 - Docker 镜像构建时把 `Backend/config.json.example` 复制为 `/app/config.json`，容器内总有基线配置
@@ -343,8 +359,11 @@ cp Backend/config.json.example Backend/config.json
 - `MODEL_SERVICE_LOG_DIR`
 - `MODEL_SERVICE_TEMP_DIR`
 - `MODEL_SERVICE_MAX_CONCURRENT_GENERATIONS`
+- `MODEL_SERVICE_BUSY_UNHEALTHY_SECONDS`
 - `MODEL_SERVICE_TEMP_FILE_MAX_AGE_HOURS`
 - `MODEL_SERVICE_TEMP_FILE_CLEANUP_INTERVAL_SECONDS`
+
+生产环境设置 `ENV=production`、`CORS_ALLOW_ORIGINS=https://<your-domain>`、`MODEL_SERVICE_ALLOW_ORIGINS=https://<your-domain>`。如果生产 CORS 包含 `*`、`localhost`、`127.0.0.1`、`[::1]` 或 `0.0.0.0`，启动会 fail-fast。
 
 默认（容器友好）路径：
 - 模型权重：`./models/Z-Image-Turbo` 或通过 `MODEL_PATH` 提供的挂载路径
@@ -355,7 +374,7 @@ cp Backend/config.json.example Backend/config.json
 
 仓库包含：
 - `.env.example`：容器间通信的默认配置
-- `.env.production.example`：生产环境模板，含 secret 占位符、副本数、资源限制
+- `.env.production.example`：生产环境模板，含 Docker secret 文件引用、副本数、资源限制
 - `.dockerignore`：根目录和各服务目录都有
 - `docker-compose.yml`：编排 MySQL、Redis、MinIO、Backend、ModelService、Frontend，可选的 `db-migrate` 工具服务
 - `docker-compose.prod.yml`：生产级资源限制、日志轮转、副本数默认值
@@ -388,12 +407,44 @@ cp Backend/config.json.example Backend/config.json
 
 ```powershell
 copy .env.production.example .env.production
-# 部署前替换所有 CHANGE_ME_* 占位符
+# 部署前替换非 secret 的 CHANGE_ME_* 占位符，尤其是 DOMAIN 和 ACME_EMAIL
 docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 说明：
 
+- 生产 secret 通过 Docker Secrets 挂载，再由 `*_FILE` 变量引用，例如
+  `/run/secrets/jwt_secret`。不要把真实 secret 写入 `.env.production`；该文件只保留
+  secret 文件路径、secret 名称、域名、端口和资源配置。
+- 单机 Docker 部署时，首次启动前先初始化 Swarm（如尚未初始化）并创建 secrets：
+  ```bash
+  docker swarm init
+  printf '%s' '<jwt-secret>' | docker secret create zimage_jwt_secret -
+  printf '%s' '<db-password>' | docker secret create zimage_db_password -
+  printf '%s' '<mysql-root-password>' | docker secret create zimage_mysql_root_password -
+  printf '%s' '<redis-password>' | docker secret create zimage_redis_password -
+  printf '%s' '<minio-password>' | docker secret create zimage_minio_password -
+  printf '%s' '<backup-s3-access-key>' | docker secret create zimage_backup_s3_access_key -
+  printf '%s' '<backup-s3-secret-key>' | docker secret create zimage_backup_s3_secret_key -
+  printf '%s' '<grafana-admin-password>' | docker secret create zimage_grafana_admin_password -
+  chmod 600 .env.production
+  ```
+- `docker-compose.prod.yml` 在 80/443 端口前置 Traefik。生产 overlay 会清掉基础 compose 中应用服务和内部依赖服务的宿主机端口映射，公网流量只应从 HTTPS 进入。
+- 首次签发证书前，把 `DOMAIN` 的 DNS `A` 记录指向部署机公网 IP。
+- 启动前在部署机创建 ACME 存储文件：
+  ```bash
+  mkdir -p traefik
+  touch traefik/acme.json
+  chmod 600 traefik/acme.json
+  ```
+- 第一次联调保留 `TRAEFIK_ACME_CA_SERVER=https://acme-staging-v02.api.letsencrypt.org/directory`。确认 `https://$DOMAIN` 和 `https://$DOMAIN/api/health` 可用后，再切到正式端点 `https://acme-v02.api.letsencrypt.org/directory`。
+- 生产验收用 `curl -vk https://$DOMAIN`、`curl https://$DOMAIN/api/health`、`curl -I http://$DOMAIN`、SSL Labs，以及 `wss://$DOMAIN/api/ws/images` 客户端检查。
+- `ops` profile 包含 `mysql-backup` 和 `mc-mirror`，用于定时 MySQL dump、binlog 归档和 S3 兼容 MinIO 镜像；见 [备份与恢复 Runbook](docs/runbook-backup-restore.md)。
+- `monitoring` profile 会启动默认只绑定本机回环地址的 Prometheus 和 Grafana：
+  ```bash
+  docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml --profile monitoring up -d prometheus grafana
+  ```
+  Prometheus 抓取 `backend:8080/metrics` 和 `model-service:8081/metrics`；Grafana 自动加载 `monitoring/dashboards/zimage.json`。
 - `docker-compose.prod.yml` 设置 CPU/内存限制 + 容器日志轮转
 - `deploy.replicas` 已经在 backend、frontend、model-service 上配置；如果本地 Compose 不支持该字段，用 `docker compose up --scale <service>=<count>` 配合同样的 env 文件
 
@@ -402,15 +453,18 @@ docker compose --env-file .env.production -f docker-compose.yml -f docker-compos
 当前作用域是单实例部署、demo 级负载，以下都是有意识的取舍 —— **开放工作项，不是没做完的作业**：
 
 - **HTTP client 重试 / 熔断（对 ModelService）。** 当前 `GenerationClient` 直连模型服务；ModelService 抖动直接传播到调用方。下个版本：指数退避重试 + circuit breaker（可能换 `cpr`，因为 Drogon 的 HTTP client 对该场景过于简陋）。
-- **请求级 observability。** 目前只暴露缓存指标。生产场景下要补 Prometheus 格式的 metrics：请求 p50/p99、按 endpoint 的错误率、ModelService 出站调用耗时，再加上跨三层的分布式追踪（OTel）。
+- **分布式追踪。** Prometheus 指标已经覆盖请求延迟、任务状态迁移、队列深度和 ModelService 生成耗时。下一步 observability 是跨 Backend / ModelService 透传 trace ID，并接 OpenTelemetry traces。
 - **缓存击穿防护（规模化）。** 计划里写了 in-process `singleflight`（mutex + `shared_future` per key）合并并发 miss。考虑到单实例部署暂时跳过；多实例部署应改用 Redis `SET NX` 做分布式锁。
 - **后端横向扩展。** Worker 池 + 任务队列已经能通过 Redis 分发。WebSocket 推送不能 —— 当前任务状态通过进程内 `TaskEventHub` 广播；多实例需要 Redis pub/sub 或 sticky session。
 - **端到端测试流水线。** 190 个单测覆盖业务逻辑、integration 测试打真实 MySQL，但没有 Playwright/Cypress 驱动的全栈场景测试（建任务 → 轮询 → 最终图片正确渲染）。
-- **Secrets 管理。** `.env.production` 个人部署够用，规模化不够。下一步是真正的 secrets manager（Vault / AWS SSM 等）。
+- **跨主机 secrets 管理。** 生产 Compose 已使用 Docker Secrets 与 `*_FILE` 变量。
+  Kubernetes 或云上部署应继续迁到 External Secrets、Vault、AWS SSM 或平台原生 secret manager。
 
 ## 安全提示
 
 - 不要提交真实 secrets 或生产密码
 - `Backend/config.json` 已 gitignore —— 用 `Backend/config.json.example` 作为模板
-- 任何共享或部署前，把 `.env` 或 `.env.production` 中所有 `CHANGE_ME_*` 占位符替换掉
-- 即使用生产 Compose overlay，也要把 MySQL/Redis 等内部服务保持在可信网络内
+- 共享 `.env` 前替换其中所有 secret 占位符；生产环境创建 Docker Secrets，`.env.production` 只保留 `*_FILE` 路径和非 secret 配置
+- 部署机上的 `.env.production` 权限应限制为 `chmod 600`
+- 使用生产 Compose overlay 时，MySQL、Redis、MinIO、ModelService 等内部服务不要直接暴露宿主机公网端口
+- 生产环境不要在宿主机防火墙直接开放 backend、frontend、model-service 端口；Traefik 应该是唯一公网 HTTP 入口

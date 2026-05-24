@@ -123,7 +123,7 @@ SendEnvelope sendOnce(const ParsedUrl& parsed, drogon::HttpMethod method,
 
     auto client = drogon::HttpClient::newHttpClient(parsed.origin, sharedHttpClientLoop());
     if (!client) {
-        envelope.http.error = "failed to initialize drogon http client";
+        envelope.http.failure = HttpError{0, "failed to initialize drogon http client"};
         return envelope;
     }
 
@@ -143,19 +143,19 @@ SendEnvelope sendOnce(const ParsedUrl& parsed, drogon::HttpMethod method,
     try {
         auto [result, response] = client->sendRequest(request, timeout);
         if (result != drogon::ReqResult::Ok) {
-            envelope.http.error =
-                std::format("request failed, req_result={}", static_cast<int>(result));
+            envelope.http.failure = HttpError{
+                0, std::format("request failed, req_result={}", static_cast<int>(result))};
             return envelope;
         }
 
         envelope.response = std::move(response);
     } catch (const std::exception& ex) {
-        envelope.http.error = std::format("request exception: {}", ex.what());
+        envelope.http.failure = HttpError{0, std::format("request exception: {}", ex.what())};
         return envelope;
     }
 
     if (!envelope.response) {
-        envelope.http.error = "request failed, empty response";
+        envelope.http.failure = HttpError{0, "request failed, empty response"};
         return envelope;
     }
 
@@ -166,19 +166,16 @@ SendEnvelope sendOnce(const ParsedUrl& parsed, drogon::HttpMethod method,
 
 } // namespace
 
-bool HttpResult::ok() const {
-    return error.empty() && status_code >= 200 && status_code < 300;
-}
-
 std::expected<std::string, HttpError> HttpResult::toExpectedBody() const {
-    if (ok()) {
+    if (failure.has_value()) {
+        return std::unexpected(*failure);
+    }
+
+    if (status_code >= 200 && status_code < 300) {
         return body;
     }
 
-    auto message = error;
-    if (message.empty()) {
-        message = std::format("http status {}", status_code);
-    }
+    auto message = std::format("http status {}", status_code);
     return std::unexpected(HttpError{status_code, std::move(message)});
 }
 
@@ -191,7 +188,7 @@ HttpResult HttpClient::get(const std::string& url, long timeoutSeconds,
         const auto parsed = parseUrl(currentUrl);
         if (!parsed) {
             HttpResult invalid;
-            invalid.error = std::format("invalid url: {}", currentUrl);
+            invalid.failure = HttpError{0, std::format("invalid url: {}", currentUrl)};
             return invalid;
         }
 
@@ -206,14 +203,15 @@ HttpResult HttpClient::get(const std::string& url, long timeoutSeconds,
         }
 
         if (redirect >= kMaxRedirects) {
-            envelope.http.error = "too many redirects";
+            envelope.http.failure = HttpError{envelope.http.status_code, "too many redirects"};
             return envelope.http;
         }
 
         const auto location = envelope.response->getHeader("Location");
         currentUrl = resolveRedirectUrl(*parsed, location);
         if (currentUrl.empty()) {
-            envelope.http.error = "redirect response missing Location header";
+            envelope.http.failure =
+                HttpError{envelope.http.status_code, "redirect response missing Location header"};
             return envelope.http;
         }
     }
@@ -225,7 +223,7 @@ HttpResult HttpClient::postJson(const std::string& url, long timeoutSeconds,
     const auto parsed = parseUrl(url);
     if (!parsed) {
         HttpResult invalid;
-        invalid.error = std::format("invalid url: {}", url);
+        invalid.failure = HttpError{0, std::format("invalid url: {}", url)};
         return invalid;
     }
 

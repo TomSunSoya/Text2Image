@@ -27,5 +27,8 @@ struct ImageBinaryResult {
 struct ImageHealthResult {
     std::string status{"unhealthy"};
     bool model_loaded{false};
+    std::string active_kind{"none"};
+    int active_generations{0};
+    int max_concurrent_generations{0};
     std::string detail;
 };

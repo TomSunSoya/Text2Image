@@ -17,7 +17,8 @@
   },
   "jwt": {
     "secret": "CHANGE_ME",
-    "expiration_hours": 24
+    "access_expiration_minutes": 15,
+    "refresh_expiration_days": 7
   },
   "python_service": {
     "url": "http://model-service:8081",
@@ -72,5 +73,16 @@
     "socket_timeout_ms": 500,
     "key_prefix": "zimage:",
     "version_key_ttl_seconds": 86400
+  },
+  "rate_limit": {
+    "enabled": true,
+    "fail_open": true,
+    "trust_proxy": false,
+    "max_active_tasks_per_user": 3,
+    "user_create_capacity": 10,
+    "user_create_window_seconds": 60,
+    "auth_ip_capacity": 5,
+    "auth_ip_window_seconds": 60,
+    "key_prefix": "zimage:rate:"
   }
 }

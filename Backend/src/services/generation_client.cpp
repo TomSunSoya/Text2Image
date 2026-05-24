@@ -19,6 +19,8 @@
 #include "models/image_storage.h"
 #include "models/task_status.h"
 #include "services/client.h"
+#include "services/http_error_mapper.h"
+#include "services/metrics_registry.h"
 
 namespace {
 
@@ -26,12 +28,17 @@ using Clock = std::chrono::system_clock;
 
 std::string downloadImageBytes(const std::string& url, long timeoutSeconds,
                                const IHttpClient& httpClient) {
-    auto response = httpClient.get(url, timeoutSeconds, {}, true);
-    if (!response.ok() || response.body.empty()) {
+    const auto startedAt = std::chrono::steady_clock::now();
+    auto rawResponse = httpClient.get(url, timeoutSeconds, {}, true);
+    metrics::MetricsRegistry::instance().observeModelServiceCall(
+        "/temp", rawResponse.failure ? "error" : std::to_string(rawResponse.status_code),
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - startedAt).count());
+    auto response = rawResponse.toExpectedBody();
+    if (!response || response->empty()) {
         return {};
     }
 
-    return response.body;
+    return std::move(*response);
 }
 
 std::string toLower(std::string value) {
@@ -126,6 +133,12 @@ void persistGeneratedImage(models::ImageGeneration& generation) {
     }
 }
 
+void markHttpRequestFailed(models::ImageGeneration& generation, const ServiceError& error) {
+    generation.status = models::TaskStatus::Failed;
+    generation.failure_code = std::string(models::failure::kPythonServiceRequestFailed);
+    generation.error_message = error.message;
+}
+
 } // namespace
 
 GenerationClient::GenerationClient() : httpClient_(std::make_shared<HttpClient>()) {}
@@ -157,26 +170,26 @@ models::ImageGeneration GenerationClient::generate(models::ImageGeneration gener
         }
 
         const auto generateUrl = serviceUrl + "/generate";
-        auto response = httpClient_->postJson(generateUrl, timeoutSeconds, modelPayload.dump());
-        if (!response.ok()) {
-            generation.status = models::TaskStatus::Failed;
-            generation.failure_code = std::string(models::failure::kPythonServiceRequestFailed);
-            if (!response.error.empty()) {
-                generation.error_message =
-                    std::format("python service request failed: {}", response.error);
-            } else {
-                generation.error_message =
-                    std::format("python service request failed, status: {}", response.status_code);
-            }
-            spdlog::warn("ImageService async call {} failed (status: {}, error: {})", generateUrl,
-                         response.status_code, response.error);
-        } else if (response.body.empty()) {
+        const auto startedAt = std::chrono::steady_clock::now();
+        auto rawResponse = httpClient_->postJson(generateUrl, timeoutSeconds, modelPayload.dump());
+        metrics::MetricsRegistry::instance().observeModelServiceCall(
+            "/generate", rawResponse.failure ? "error" : std::to_string(rawResponse.status_code),
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - startedAt).count());
+        auto response = rawResponse.toExpectedBody();
+        if (!response) {
+            const auto serviceError = mapHttpError(response.error());
+            markHttpRequestFailed(generation, serviceError);
+            spdlog::warn(
+                "ImageService async call {} failed (status: {}, message: {}, mapped_code: {})",
+                generateUrl, response.error().status_code, response.error().message,
+                serviceError.code);
+        } else if (response->empty()) {
             generation.status = models::TaskStatus::Failed;
             generation.failure_code = std::string(models::failure::kPythonServiceEmptyResponse);
             generation.error_message = "python service returned empty response";
             spdlog::warn("ImageService async call {} returned empty response body", generateUrl);
         } else {
-            const auto remoteJson = nlohmann::json::parse(response.body, nullptr, false);
+            const auto remoteJson = nlohmann::json::parse(*response, nullptr, false);
             if (!remoteJson.is_discarded()) {
                 mergeRemoteResult(remoteJson, generation);
             } else {
@@ -247,23 +260,27 @@ ImageHealthResult GenerationClient::checkHealth() const {
         }
         timeoutSeconds = (std::min)(timeoutSeconds, 10L);
 
-        const auto response = httpClient_->get(serviceUrl + "/health", timeoutSeconds);
+        const auto startedAt = std::chrono::steady_clock::now();
+        auto rawResponse = httpClient_->get(serviceUrl + "/health", timeoutSeconds);
+        metrics::MetricsRegistry::instance().observeModelServiceCall(
+            "/health", rawResponse.failure ? "error" : std::to_string(rawResponse.status_code),
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - startedAt).count());
+        auto response = rawResponse.toExpectedBody();
 
-        if (!response.ok()) {
+        if (!response) {
+            const auto serviceError = mapHttpError(response.error());
             result.status = "unhealthy";
-            result.detail = !response.error.empty()
-                                ? response.error
-                                : std::format("http status {}", response.status_code);
+            result.detail = serviceError.message;
             return result;
         }
 
-        if (response.body.empty()) {
+        if (response->empty()) {
             result.status = "unhealthy";
             result.detail = "empty response body";
             return result;
         }
 
-        const auto healthJson = nlohmann::json::parse(response.body, nullptr, false);
+        const auto healthJson = nlohmann::json::parse(*response, nullptr, false);
         if (healthJson.is_discarded()) {
             result.status = "unhealthy";
             result.detail = "invalid json response";
@@ -272,9 +289,20 @@ ImageHealthResult GenerationClient::checkHealth() const {
 
         const auto remoteStatus = toLower(healthJson.value("status", std::string{}));
         result.model_loaded = healthJson.value("model_loaded", false);
+        result.active_kind = toLower(healthJson.value("active_kind", std::string{"none"}));
+        if (result.active_kind.empty()) {
+            result.active_kind = "none";
+        }
+        result.active_generations = (std::max)(0, healthJson.value("active_generations", 0));
+        result.max_concurrent_generations =
+            (std::max)(0, healthJson.value("max_concurrent_generations", 0));
 
-        if (remoteStatus == "healthy" || remoteStatus == "ok" || remoteStatus == "success" ||
-            result.model_loaded) {
+        if (remoteStatus == "healthy" || remoteStatus == "ok" || remoteStatus == "success") {
+            result.status = "healthy";
+        } else if (remoteStatus == "busy" || remoteStatus == "loading" ||
+                   remoteStatus == "unhealthy") {
+            result.status = remoteStatus;
+        } else if (result.model_loaded) {
             result.status = "healthy";
         } else {
             result.status = "unhealthy";

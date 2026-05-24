@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <format>
 #include <iterator>
+#include <optional>
 #include <ranges>
 #include <tuple>
 
@@ -177,6 +178,57 @@ bool redis::RedisClient::leaseExists(int64_t taskId) {
         spdlog::warn("Redis leaseExists failed: {}", e.what());
         return false;
     }
+}
+
+void redis::RedisClient::setex(const std::string& key, const std::string& value,
+                               std::chrono::seconds ttl) const {
+    impl_->redis.setex(key, ttl, value);
+}
+
+std::optional<std::string> redis::RedisClient::get(const std::string& key) const {
+    auto value = impl_->redis.get(key);
+    if (!value) {
+        return std::nullopt;
+    }
+    return *value;
+}
+
+std::optional<std::string> redis::RedisClient::getDel(const std::string& key) const {
+    static const std::string script = R"(
+          local value = redis.call('GET', KEYS[1])
+          if value ~= false then
+              redis.call('DEL', KEYS[1])
+          end
+          return value
+      )";
+
+    auto value = impl_->redis.eval<sw::redis::OptionalString>(script, {key}, {});
+    if (!value) {
+        return std::nullopt;
+    }
+    return *value;
+}
+
+bool redis::RedisClient::del(const std::string& key) const {
+    return impl_->redis.del(key) > 0;
+}
+
+void redis::RedisClient::sadd(const std::string& key, const std::string& value) const {
+    impl_->redis.sadd(key, value);
+}
+
+void redis::RedisClient::srem(const std::string& key, const std::string& value) const {
+    impl_->redis.srem(key, value);
+}
+
+std::vector<std::string> redis::RedisClient::smembers(const std::string& key) const {
+    std::vector<std::string> members;
+    impl_->redis.smembers(key, std::back_inserter(members));
+    return members;
+}
+
+void redis::RedisClient::expire(const std::string& key, std::chrono::seconds ttl) const {
+    impl_->redis.expire(key, ttl);
 }
 
 redis::RedisClient::~RedisClient() = default;

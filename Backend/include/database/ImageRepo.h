@@ -23,6 +23,7 @@ class ImageRepo : public IImageRepo {
 
     [[nodiscard]] RepoResult<std::optional<models::ImageGeneration>>
     findByRequestIdAndUserId(const std::string& requestId, int64_t userId) override;
+    [[nodiscard]] RepoResult<int64_t> countActiveTasksByUserId(int64_t userId) override;
     [[nodiscard]] RepoResult<std::optional<models::ImageGeneration>>
     claimNextTask(const std::string& workerId, long leaseSeconds);
     [[nodiscard]] RepoResult<std::optional<models::ImageGeneration>>
@@ -33,6 +34,10 @@ class ImageRepo : public IImageRepo {
                                               const std::string& workerId, long leaseSeconds);
 
     [[nodiscard]] RepoResult<bool> finishClaimedTask(const models::ImageGeneration& generation);
+    [[nodiscard]] RepoResult<bool> deferClaimedTaskForModelHealth(int64_t id, int64_t userId,
+                                                                  const std::string& workerId,
+                                                                  const std::string& failureCode,
+                                                                  const std::string& errorMessage);
     [[nodiscard]] RepoResult<std::optional<models::ImageGeneration>>
     cancelByIdAndUserId(int64_t id, int64_t userId) override;
     [[nodiscard]] RepoResult<std::optional<models::ImageGeneration>>

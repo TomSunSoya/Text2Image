@@ -35,6 +35,8 @@ class IImageRepo {
     [[nodiscard]] virtual RepoResult<std::optional<models::ImageGeneration>>
     findByRequestIdAndUserId(const std::string& requestId, int64_t userId) = 0;
 
+    [[nodiscard]] virtual RepoResult<int64_t> countActiveTasksByUserId(int64_t userId) = 0;
+
     virtual RepoResult<bool> deleteByIdAndUserId(int64_t id, int64_t userId) = 0;
 
     [[nodiscard]] virtual RepoResult<std::optional<models::ImageGeneration>>

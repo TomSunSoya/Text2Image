@@ -20,7 +20,9 @@
 #include "models/task_status.h"
 #include "services/generation_client.h"
 #include "services/image_cache_key.h"
+#include "services/metrics_registry.h"
 #include "services/null_cache_client.h"
+#include "services/rate_limiter.h"
 #include "services/redis_client.h"
 #include "services/repo_error_mapper.h"
 #include "services/task_engine.h"
@@ -112,6 +114,15 @@ std::optional<ServiceError> validateGenerationParams(models::ImageGeneration& ge
 std::chrono::seconds& presignTtlRef() {
     static std::chrono::seconds ttl{0};
     return ttl;
+}
+
+int maxActiveTasksPerUser() {
+    try {
+        return rate_limit::loadRateLimitConfig().max_active_tasks_per_user;
+    } catch (const std::exception& ex) {
+        spdlog::warn("Failed to load rate limit config, using active task default: {}", ex.what());
+        return rate_limit::RateLimitConfig{}.max_active_tasks_per_user;
+    }
 }
 
 } // namespace
@@ -231,7 +242,7 @@ void ImageService::setPresignTtl(std::chrono::seconds ttl) {
 }
 
 std::expected<ImageCreateResult, ServiceError>
-ImageService::create(int64_t userId, const nlohmann::json& payload) const {
+ImageService::create(int64_t userId, const nlohmann::json& payload, bool isAdmin) const {
     if (userId <= 0) {
         return std::unexpected(
             ServiceError{drogon::k401Unauthorized, "unauthorized", "unauthorized"});
@@ -241,6 +252,22 @@ ImageService::create(int64_t userId, const nlohmann::json& payload) const {
 
     if (auto validationError = validateGenerationParams(generation)) {
         return std::unexpected(std::move(*validationError));
+    }
+
+    const auto maxActive = maxActiveTasksPerUser();
+    if (!isAdmin && maxActive > 0) {
+        auto activeTasks = repo_->countActiveTasksByUserId(userId);
+        if (!activeTasks) {
+            return std::unexpected(mapRepoError(activeTasks.error()));
+        }
+        if (*activeTasks >= maxActive) {
+            ServiceError error = ServiceError::tooManyRequests(
+                "too_many_active_tasks",
+                std::format("too many active image tasks, limit is {}", maxActive));
+            error.details["maxActiveTasks"] = maxActive;
+            error.details["activeTasks"] = *activeTasks;
+            return std::unexpected(std::move(error));
+        }
     }
 
     generation.user_id = userId;
@@ -272,6 +299,7 @@ ImageService::create(int64_t userId, const nlohmann::json& payload) const {
     }
 
     generation.id = *insertedId;
+    metrics::MetricsRegistry::instance().recordTaskStatus(generation.status);
 
     try {
         TaskEventHub::instance().publishTaskUpdated(generation);
@@ -491,6 +519,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::cancelById(int64_t use
         }
 
         TaskEventHub::instance().publishTaskUpdated(**updated);
+        metrics::MetricsRegistry::instance().recordTaskStatus((*updated)->status);
         cache_->del(image_cache::metaKey(userId, id)); // evict cache
         invalidateListCacheFor(userId);
         return ImageGetResult{**updated};
@@ -541,6 +570,7 @@ std::expected<ImageGetResult, ServiceError> ImageService::retryById(int64_t user
 
     try {
         TaskEventHub::instance().publishTaskUpdated(**updated);
+        metrics::MetricsRegistry::instance().recordTaskStatus((*updated)->status);
         cache_->del(image_cache::metaKey(userId, id)); // evict cache
 
         invalidateListCacheFor(userId);

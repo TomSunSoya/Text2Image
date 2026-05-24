@@ -454,6 +454,21 @@ ImageRepo::findByRequestIdAndUserId(const std::string& requestId, int64_t userId
     });
 }
 
+RepoResult<int64_t> ImageRepo::countActiveTasksByUserId(int64_t userId) {
+    return repoInvoke([&] {
+        ensureTable();
+
+        auto result = database::DBManager::threadSession()
+                          .sql("SELECT COUNT(*) FROM " + imageTableName() +
+                               " WHERE user_id = ? AND status IN ('queued', 'pending', "
+                               "'generating')")
+                          .bind(userId)
+                          .execute();
+
+        return extractCount(result);
+    });
+}
+
 RepoResult<std::optional<models::ImageGeneration>>
 ImageRepo::claimNextTask(const std::string& workerId, long leaseSeconds) {
     return repoInvoke([&] -> std::optional<models::ImageGeneration> {
@@ -644,6 +659,27 @@ RepoResult<bool> ImageRepo::finishClaimedTask(const models::ImageGeneration& gen
                       generation.thumbnail_url, generation.storage_key, generation.id,
                       generation.user_id)
                 .bind(generation.worker_id)
+                .execute();
+
+        return result.getAffectedItemsCount() > 0;
+    });
+}
+
+RepoResult<bool> ImageRepo::deferClaimedTaskForModelHealth(int64_t id, int64_t userId,
+                                                           const std::string& workerId,
+                                                           const std::string& failureCode,
+                                                           const std::string& errorMessage) {
+    return repoInvoke([&] {
+        ensureTable();
+
+        auto result =
+            database::DBManager::threadSession()
+                .sql("UPDATE " + imageTableName() +
+                     " SET status = 'queued', retry_count = retry_count + 1, failure_code = ?, "
+                     "error_message = ?, worker_id = NULL, lease_expires_at = NULL, "
+                     "started_at = NULL "
+                     "WHERE id = ? AND user_id = ? AND status = 'generating' AND worker_id = ?")
+                .bind(failureCode, errorMessage, id, userId, workerId)
                 .execute();
 
         return result.getAffectedItemsCount() > 0;

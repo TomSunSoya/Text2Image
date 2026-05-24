@@ -36,6 +36,10 @@ class FakeImageRepo : public IImageRepo {
         return std::optional<models::ImageGeneration>{};
     }
 
+    RepoResult<int64_t> countActiveTasksByUserId(int64_t) override {
+        return 0;
+    }
+
     RepoResult<bool> deleteByIdAndUserId(int64_t, int64_t) override {
         return false;
     }

@@ -98,8 +98,12 @@ Code: `Backend/tests/unit/image_service_test_fakes.h`
 ### Auth
 
 - `POST /api/auth/register`
-- `POST /api/auth/login`
-- Authenticated image APIs use `Authorization: Bearer <token>`
+- `POST /api/auth/login` — returns `access_token`, `refresh_token`, and `expires_in` (900 seconds by default)
+- `POST /api/auth/refresh` — rotates a refresh token and returns a new token pair
+- `POST /api/auth/logout` — revokes the submitted refresh token
+- `GET /api/auth/me` — current user profile
+- `PUT /api/auth/password` — change password and revoke all refresh tokens for the user
+- Authenticated image APIs use `Authorization: Bearer <access_token>`
 - Users have a `role` field; promote initial admin via SQL:
   ```sql
   UPDATE users SET role = 'admin' WHERE username = '<your_username>';
@@ -123,9 +127,11 @@ Code: `Backend/tests/unit/image_service_test_fakes.h`
 - `GET /health` — backend liveness
 - `GET /api/images/health` — backend-proxied model service health
 - `GET http://<model-service-host>:8081/health` — model service direct
+- `GET /metrics` — Prometheus text metrics for backend latency, task transitions, queue depth, DB gauges, and model-service outbound calls
 - `GET /api/metrics/cache` — admin-only cache hit/miss/degraded counters per namespace
+- `GET http://<model-service-host>:8081/metrics` — model-service Prometheus metrics for health, generation duration, active work, and GPU memory
 
-`ModelService` health states: `healthy` (loaded, idle) / `busy` (loaded, generating) / `loading` (alive, still initializing) / `unhealthy` (failed). The health response also exposes `active_kind` (`none / generate / edit`) so the backend can route work without conflicting with an in-progress job.
+`ModelService` health states: `healthy` (loaded, idle) / `busy` (loaded, generating) / `loading` (alive, still initializing) / `unhealthy` (failed or stuck past `MODEL_SERVICE_BUSY_UNHEALTHY_SECONDS`). The health response also exposes `active_kind` (`none / generate / edit`) and active-generation counters so the backend can back off without holding a worker lease until timeout.
 
 ## Repository Layout
 
@@ -291,7 +297,7 @@ The repository includes `.github/workflows/ci.yml` with a lightweight default pi
 
 - frontend: `npm ci` + `npm run build`
 - backend: Docker-based Linux build that runs `UnitTests` and `IntegrationTests`
-- model service: Python entrypoint compile smoke check
+- model service: Python entrypoint compile smoke check + mocked FastAPI pytest suite
 - docker: `docker compose config` plus runtime image builds for `Backend/` and `ZImageFrontend/`
 
 Heavyweight model-image validation is intentionally split into `.github/workflows/model-service-image.yml`, so the default CI stays stable and reasonably fast.
@@ -315,22 +321,33 @@ Important settings:
 
 - `server`: host, port, thread count
 - `database`: MySQL connection, optional SSL mode, and pool settings
-- `jwt`: secret and token expiration
+- `jwt`: secret, access-token TTL, and refresh-token TTL
 - `python_service`: model-service URL and execution timeout
 - `task_engine`: worker count, polling, lease, retry policy
+- `cors`: allowed browser origins for Backend API access
 - `redis`: queue coordination, lease keys, timeouts, and enable switch
+- `rate_limit`: Redis token-bucket limits and active task quota
 - `storage`: local image storage settings
 
 Environment-variable overrides are supported in the backend for common settings such as:
 
 - `BACKEND_PORT`
 - `DB_HOST` `DB_PORT` `DB_USERNAME` `DB_PASSWORD` `DB_NAME` `DB_SSL`
-- `JWT_SECRET`
+- `CORS_ENABLED` `CORS_ALLOW_ORIGINS`
+- `JWT_SECRET` `JWT_ACCESS_EXPIRATION_MINUTES` `JWT_REFRESH_EXPIRATION_DAYS`
 - `PYTHON_SERVICE_URL` `PYTHON_SERVICE_TIMEOUT_SECONDS`
 - `REDIS_ENABLED` `REDIS_HOST` `REDIS_PORT` `REDIS_PASSWORD` `REDIS_DB`
 - `REDIS_POOL_SIZE` `REDIS_CONNECT_TIMEOUT_MS` `REDIS_SOCKET_TIMEOUT_MS`
 - `REDIS_TASK_QUEUE_KEY` `REDIS_LEASE_KEY_PREFIX`
+- `RATE_LIMIT_ENABLED` `RATE_LIMIT_FAIL_OPEN` `RATE_LIMIT_MAX_ACTIVE_TASKS_PER_USER`
+- `RATE_LIMIT_USER_CREATE_CAPACITY` `RATE_LIMIT_USER_CREATE_WINDOW_SECONDS`
+- `RATE_LIMIT_AUTH_IP_CAPACITY` `RATE_LIMIT_AUTH_IP_WINDOW_SECONDS` `RATE_LIMIT_KEY_PREFIX`
 - `STORAGE_ROOT_DIR` `STORAGE_PUBLIC_URL_PREFIX` `STORAGE_EXTENSION`
+
+File-backed secret overrides take precedence when present: `DB_PASSWORD_FILE`,
+`JWT_SECRET_FILE`, `REDIS_PASSWORD_FILE`, `CACHE_PASSWORD_FILE`, and
+`MINIO_SECRET_KEY_FILE`. Startup fails with a clear error if a configured secret file is
+missing or empty.
 
 The backend is now container-friendly in two ways:
 - Docker image builds include `/app/config.json` from `Backend/config.json.example`, so the container always has a file-based baseline config
@@ -346,8 +363,11 @@ Key environment variables:
 - `MODEL_SERVICE_LOG_DIR`
 - `MODEL_SERVICE_TEMP_DIR`
 - `MODEL_SERVICE_MAX_CONCURRENT_GENERATIONS`
+- `MODEL_SERVICE_BUSY_UNHEALTHY_SECONDS`
 - `MODEL_SERVICE_TEMP_FILE_MAX_AGE_HOURS`
 - `MODEL_SERVICE_TEMP_FILE_CLEANUP_INTERVAL_SECONDS`
+
+For production, set `ENV=production`, `CORS_ALLOW_ORIGINS=https://<your-domain>`, and `MODEL_SERVICE_ALLOW_ORIGINS=https://<your-domain>`. Startup fails fast if production CORS includes `*`, `localhost`, `127.0.0.1`, `[::1]`, or `0.0.0.0`.
 
 Default container-oriented paths now assume:
 - model weights: `./models/Z-Image-Turbo` or a mounted path provided through `MODEL_PATH`
@@ -358,7 +378,7 @@ Default container-oriented paths now assume:
 
 The repository includes:
 - `.env.example` with service-to-service defaults for containers
-- `.env.production.example` as a production-only template with secret placeholders, replica counts, and resource limits
+- `.env.production.example` as a production-only template with Docker secret file references, replica counts, and resource limits
 - `.dockerignore` files at the repository root and per service
 - `docker-compose.yml` to orchestrate MySQL, Redis, MinIO, Backend, ModelService, Frontend, and the optional `db-migrate` utility service
 - `docker-compose.prod.yml` for production-oriented resource limits, log rotation, and replica defaults
@@ -391,12 +411,46 @@ Recommended production flow:
 
 ```powershell
 copy .env.production.example .env.production
-# replace every CHANGE_ME_* placeholder before deployment
+# replace non-secret CHANGE_ME_* placeholders, especially DOMAIN and ACME_EMAIL
 docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 Notes:
 
+- Production secrets are mounted from Docker Secrets and referenced through `*_FILE`
+  variables such as `/run/secrets/jwt_secret`. Do not put secret values in
+  `.env.production`; keep that file to file paths, secret names, domains, ports, and
+  resource settings.
+- On a single Docker host, initialize Swarm if needed and create secrets before first
+  startup:
+  ```bash
+  docker swarm init
+  printf '%s' '<jwt-secret>' | docker secret create zimage_jwt_secret -
+  printf '%s' '<db-password>' | docker secret create zimage_db_password -
+  printf '%s' '<mysql-root-password>' | docker secret create zimage_mysql_root_password -
+  printf '%s' '<redis-password>' | docker secret create zimage_redis_password -
+  printf '%s' '<minio-password>' | docker secret create zimage_minio_password -
+  printf '%s' '<backup-s3-access-key>' | docker secret create zimage_backup_s3_access_key -
+  printf '%s' '<backup-s3-secret-key>' | docker secret create zimage_backup_s3_secret_key -
+  printf '%s' '<grafana-admin-password>' | docker secret create zimage_grafana_admin_password -
+  chmod 600 .env.production
+  ```
+- `docker-compose.prod.yml` fronts the app with Traefik on ports 80/443. Host port mappings from the base compose file are reset in production for app and internal dependency services; public traffic should enter through HTTPS only.
+- Point the DNS `A` record for `DOMAIN` to the deployment host before the first certificate request.
+- Create the ACME storage file on the deployment host before startup:
+  ```bash
+  mkdir -p traefik
+  touch traefik/acme.json
+  chmod 600 traefik/acme.json
+  ```
+- Keep `TRAEFIK_ACME_CA_SERVER=https://acme-staging-v02.api.letsencrypt.org/directory` for the first routing test. After `https://$DOMAIN` and `https://$DOMAIN/api/health` work, switch it to `https://acme-v02.api.letsencrypt.org/directory` for a trusted certificate.
+- Verify production routing with `curl -vk https://$DOMAIN`, `curl https://$DOMAIN/api/health`, `curl -I http://$DOMAIN`, SSL Labs, and a `wss://$DOMAIN/api/ws/images` client.
+- The `ops` profile includes `mysql-backup` and `mc-mirror` for scheduled MySQL dumps, binlog archiving, and S3-compatible MinIO mirroring; see [Backup and Restore Runbook](docs/runbook-backup-restore.md).
+- The `monitoring` profile starts Prometheus and Grafana on loopback by default:
+  ```bash
+  docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml --profile monitoring up -d prometheus grafana
+  ```
+  Prometheus scrapes `backend:8080/metrics` and `model-service:8081/metrics`; Grafana provisions `monitoring/dashboards/zimage.json`.
 - `docker-compose.prod.yml` sets CPU and memory limits plus container log rotation defaults
 - `deploy.replicas` values are provided for backend, frontend, and model-service; if your local Compose setup ignores them, use `docker compose up --scale <service>=<count>` with the same env file
 
@@ -405,15 +459,19 @@ Notes:
 These are conscious trade-offs given the current scope (single-instance deployment, demo-grade load) — open work, not unfinished homework:
 
 - **HTTP client retry / circuit breaker against ModelService.** Today `GenerationClient` calls the model service directly; a ModelService hiccup propagates straight to the caller. Next iteration: exponential-backoff retry + circuit breaker (probably swapping in `cpr` since Drogon's HTTP client is bare-bones for this use case).
-- **Request-level observability.** Only cache metrics are surfaced today. For production I'd add Prometheus-format exporters for request latency p50/p99, error rate by endpoint, and outbound ModelService call duration — plus distributed tracing (OTel) across the three tiers.
+- **Distributed tracing.** Prometheus metrics now cover request latency, task transitions, queue depth, and ModelService generation timing. The next observability step is request trace ID propagation and OpenTelemetry traces across Backend and ModelService.
 - **Cache stampede protection at scale.** The plan called for in-process `singleflight` (mutex + `shared_future` per key) to coalesce concurrent misses on the same list key. Skipped because of single-instance assumptions; multi-instance deployment would want Redis `SET NX` as a distributed lock instead.
 - **Backend horizontal scaling.** Worker pool + task queue are already distributable via Redis. WebSocket push isn't — task status broadcasts through an in-process `TaskEventHub`; multi-instance needs Redis pub/sub or a sticky-session strategy.
 - **End-to-end test pipeline.** Unit tests (190 cases) cover business logic; integration tests hit a real MySQL. But there's no Playwright/Cypress-driven full-stack scenario test (create task → poll → final image rendered correctly).
-- **Secrets management.** `.env.production` works for solo deployment but doesn't scale. A real secrets manager (Vault, AWS SSM, etc.) is the next step beyond env vars.
+- **Secrets beyond a single host.** Production Compose now uses Docker Secrets and
+  `*_FILE` variables. Larger Kubernetes or cloud deployments should move those values
+  into External Secrets, Vault, AWS SSM, or the platform-native secret manager.
 
 ## Security Notes
 
 - do not commit real secrets or production passwords
 - `Backend/config.json` is gitignored — use `Backend/config.json.example` as the template
-- replace every `CHANGE_ME_*` placeholder in `.env` or `.env.production` before any shared or deployed usage
-- keep internal-only services such as MySQL and Redis on trusted networks even when using the production compose override
+- replace every secret placeholder in `.env` before shared use; in production, create Docker Secrets and keep `.env.production` to `*_FILE` paths and non-secret settings
+- restrict `.env.production` permissions on the deployment host with `chmod 600`
+- keep internal-only services such as MySQL, Redis, MinIO, and ModelService off public host ports when using the production compose override
+- in production, keep direct backend/frontend/model-service ports closed at the host firewall; Traefik should be the only public HTTP entrypoint

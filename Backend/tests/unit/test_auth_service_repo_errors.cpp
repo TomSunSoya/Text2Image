@@ -55,6 +55,13 @@ class FakeUserRepo : public IUserRepo {
         return 42;
     }
 
+    RepoResult<bool> updatePassword(int64_t, const std::string&) override {
+        if (auto error = consumeError()) {
+            return std::unexpected(*error);
+        }
+        return true;
+    }
+
   private:
     std::optional<RepoError> consumeError() {
         if (!next_error) {

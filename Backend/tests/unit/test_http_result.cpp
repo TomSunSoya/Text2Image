@@ -3,7 +3,7 @@
 #include "services/i_http_client.h"
 
 TEST(HttpResult, ToExpectedBodyReturnsBodyForSuccessfulStatus) {
-    const HttpResult result{200, "payload", ""};
+    const HttpResult result{200, "payload"};
 
     const auto body = result.toExpectedBody();
 
@@ -12,7 +12,8 @@ TEST(HttpResult, ToExpectedBodyReturnsBodyForSuccessfulStatus) {
 }
 
 TEST(HttpResult, ToExpectedBodyReturnsErrorStringForRequestError) {
-    const HttpResult result{0, "", "request failed"};
+    HttpResult result;
+    result.failure = HttpError{0, "request failed"};
 
     const auto body = result.toExpectedBody();
 
@@ -22,7 +23,7 @@ TEST(HttpResult, ToExpectedBodyReturnsErrorStringForRequestError) {
 }
 
 TEST(HttpResult, ToExpectedBodyReturnsStatusFallbackForHttpError) {
-    const HttpResult result{500, "body", ""};
+    const HttpResult result{500, "body"};
 
     const auto body = result.toExpectedBody();
 

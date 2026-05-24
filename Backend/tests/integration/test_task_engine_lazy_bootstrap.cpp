@@ -3,11 +3,13 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
 
 #include "database/ImageRepo.h"
+#include "models/failure_code.h"
 #include "services/auth_service.h"
 #include "services/image_service.h"
 #include "test_db_support.h"
@@ -54,21 +56,26 @@ TEST(TaskEngineLazyBootstrap, EnqueueStartsWorkersWithoutExplicitBootstrap) {
     ImageRepo repo;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 
-    models::TaskStatus lastStatus = models::TaskStatus::Queued;
+    std::optional<models::ImageGeneration> lastTask;
     while (std::chrono::steady_clock::now() < deadline) {
         auto task = repo.findByIdAndUserId(created->generation.id, userId);
         ASSERT_TRUE(task.has_value()) << task.error().message;
         ASSERT_TRUE(task->has_value());
 
-        lastStatus = (*task)->status;
-        if (models::isTerminal(lastStatus)) {
+        lastTask = **task;
+        if (lastTask->status == models::TaskStatus::Queued && lastTask->retry_count > 0) {
             break;
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    EXPECT_EQ(lastStatus, models::TaskStatus::Failed);
+    ASSERT_TRUE(lastTask.has_value());
+    EXPECT_EQ(lastTask->status, models::TaskStatus::Queued);
+    EXPECT_GT(lastTask->retry_count, 0);
+    EXPECT_EQ(lastTask->failure_code, std::string(models::failure::kModelServiceUnavailable));
+    EXPECT_TRUE(lastTask->worker_id.empty());
+    EXPECT_FALSE(lastTask->lease_expires_at.has_value());
 }
 
 int main(int argc, char** argv) {

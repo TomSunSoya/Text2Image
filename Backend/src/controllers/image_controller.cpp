@@ -1,6 +1,7 @@
 #include "controllers/image_controller.h"
 
 #include <charconv>
+#include <format>
 #include <ranges>
 #include <string>
 #include <vector>
@@ -9,6 +10,7 @@
 
 #include "controllers/handler_utils.h"
 #include "services/image_service.h"
+#include "services/rate_limiter.h"
 
 namespace {
 
@@ -65,31 +67,52 @@ nlohmann::json toStatusJson(const models::ImageGeneration& generation) {
 
 void ImageController::checkHealth(const drogon::HttpRequestPtr&,
                                   std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
-    controllers::runJsonHandler(std::move(callback), "ImageController::checkHealth",
-                                [](const drogon::HttpResponsePtr& resp) {
-                                    ImageService service;
-                                    const auto health = service.checkHealth();
+    controllers::runJsonHandler(
+        std::move(callback), "ImageController::checkHealth",
+        [](const drogon::HttpResponsePtr& resp) {
+            ImageService service;
+            const auto health = service.checkHealth();
 
-                                    nlohmann::json body = {{"status", health.status},
-                                                           {"modelLoaded", health.model_loaded}};
-                                    if (!health.detail.empty()) {
-                                        body["detail"] = health.detail;
-                                    }
+            nlohmann::json body = {{"status", health.status},
+                                   {"modelLoaded", health.model_loaded},
+                                   {"activeKind", health.active_kind},
+                                   {"activeGenerations", health.active_generations},
+                                   {"maxConcurrentGenerations", health.max_concurrent_generations}};
+            if (!health.detail.empty()) {
+                body["detail"] = health.detail;
+            }
 
-                                    resp->setStatusCode(drogon::k200OK);
-                                    resp->setBody(body.dump());
-                                });
+            resp->setStatusCode(drogon::k200OK);
+            resp->setBody(body.dump());
+        });
 }
 
 void ImageController::create(const drogon::HttpRequestPtr& req,
                              std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
-    controllers::runAuthenticatedJson(
-        req, std::move(callback), "ImageController::create",
-        [&req](int64_t userId, const drogon::HttpResponsePtr& resp) {
+    controllers::runJsonHandler(
+        std::move(callback), "ImageController::create",
+        [&req](const drogon::HttpResponsePtr& resp) {
+            const auto user = controllers::resolveUser(req, resp);
+            if (!user) {
+                return;
+            }
+
+            const bool isAdmin = user->role == "admin";
+            const auto& rateConfig = rate_limit::defaultRateLimitConfig();
+            if (rateConfig.enabled && !isAdmin) {
+                const auto acquired = rate_limit::defaultRateLimiter()->tryAcquire(
+                    rate_limit::userKey(user->user_id, rateConfig), rateConfig.user_create_capacity,
+                    rateConfig.user_create_window);
+                if (!acquired) {
+                    controllers::fillServiceError(resp, acquired.error());
+                    return;
+                }
+            }
+
             const auto payload = nlohmann::json::parse(req->getBody());
             ImageService service;
             controllers::respondFromExpected(
-                resp, service.create(userId, payload), drogon::k202Accepted,
+                resp, service.create(user->user_id, payload, isAdmin), drogon::k202Accepted,
                 [](const ImageCreateResult& r) { return r.generation.toJson().dump(); });
         });
 }

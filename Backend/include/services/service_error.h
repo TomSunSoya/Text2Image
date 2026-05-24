@@ -20,6 +20,10 @@ struct ServiceError {
     ServiceError(drogon::HttpStatusCode s, std::string c, std::string m, nlohmann::json d)
         : status(s), code(std::move(c)), message(std::move(m)), details(std::move(d)) {}
 
+    static ServiceError tooManyRequests(std::string code, std::string message) {
+        return ServiceError{drogon::k429TooManyRequests, std::move(code), std::move(message)};
+    }
+
     [[nodiscard]] nlohmann::json toJson() const {
         nlohmann::json body = {{"code", code}, {"message", message}};
 

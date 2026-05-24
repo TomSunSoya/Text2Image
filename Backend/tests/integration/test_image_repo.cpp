@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "database/ImageRepo.h"
+#include "models/failure_code.h"
 #include "test_db_support.h"
 
 namespace {
@@ -392,6 +393,42 @@ TEST_F(ImageRepoTest, FinishClaimedTaskWrongWorkerFails) {
 
     bool finished = repoValue(repo_.finishClaimedTask(result));
     EXPECT_FALSE(finished);
+}
+
+TEST_F(ImageRepoTest, DeferClaimedTaskForModelHealthRequeuesAndClearsLease) {
+    auto gen = makeGen(kTestUserId, "model unavailable");
+    int64_t id = repoValue(repo_.insert(gen));
+    auto claimed = repoValue(repo_.claimTaskById(id, "worker-health", 300));
+    ASSERT_TRUE(claimed.has_value());
+
+    const bool deferred = repoValue(repo_.deferClaimedTaskForModelHealth(
+        id, kTestUserId, "worker-health", std::string(models::failure::kModelServiceUnavailable),
+        "model service is loading"));
+
+    EXPECT_TRUE(deferred);
+
+    auto fetched = repoValue(repo_.findByIdAndUserId(id, kTestUserId));
+    ASSERT_TRUE(fetched.has_value());
+    EXPECT_EQ(fetched->status, models::TaskStatus::Queued);
+    EXPECT_EQ(fetched->retry_count, 1);
+    EXPECT_EQ(fetched->failure_code, std::string(models::failure::kModelServiceUnavailable));
+    EXPECT_EQ(fetched->error_message, "model service is loading");
+    EXPECT_TRUE(fetched->worker_id.empty());
+    EXPECT_FALSE(fetched->lease_expires_at.has_value());
+    EXPECT_FALSE(fetched->started_at.has_value());
+}
+
+TEST_F(ImageRepoTest, DeferClaimedTaskForModelHealthWrongWorkerFails) {
+    auto gen = makeGen(kTestUserId, "wrong health worker");
+    int64_t id = repoValue(repo_.insert(gen));
+    auto claimed = repoValue(repo_.claimTaskById(id, "worker-health", 300));
+    ASSERT_TRUE(claimed.has_value());
+
+    const bool deferred = repoValue(repo_.deferClaimedTaskForModelHealth(
+        id, kTestUserId, "other-worker", std::string(models::failure::kModelServiceUnavailable),
+        "model service is loading"));
+
+    EXPECT_FALSE(deferred);
 }
 
 // ==================== RenewLease ====================

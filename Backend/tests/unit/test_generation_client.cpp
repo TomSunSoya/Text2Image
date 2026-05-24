@@ -49,12 +49,18 @@ class MockHttpClient : public IHttpClient {
     }
 };
 
-// Helper to construct HttpResult with given status, body, and error
-HttpResult makeResult(long status, std::string body = "", std::string error = "") {
+// Helper to construct an HTTP status response.
+HttpResult makeResult(long status, std::string body = "") {
     HttpResult r;
     r.status_code = status;
     r.body = std::move(body);
-    r.error = std::move(error);
+    return r;
+}
+
+HttpResult makeFailure(std::string message, long status = 0) {
+    HttpResult r;
+    r.status_code = status;
+    r.failure = HttpError{status, std::move(message)};
     return r;
 }
 
@@ -152,7 +158,7 @@ class GenerationClientTest : public ::testing::Test {
 
 TEST_F(GenerationClientTest, Http500ReturnsRequestFailed) {
     auto mock = std::make_shared<MockHttpClient>();
-    mock->postResult = makeResult(500, "", "Server Error");
+    mock->postResult = makeResult(500, "Server Error");
 
     GenerationClient client(mock);
     models::ImageGeneration generation;
@@ -162,6 +168,52 @@ TEST_F(GenerationClientTest, Http500ReturnsRequestFailed) {
 
     EXPECT_EQ(result.status, models::TaskStatus::Failed);
     EXPECT_EQ(result.failure_code, std::string(models::failure::kPythonServiceRequestFailed));
+    EXPECT_EQ(result.error_message, "model service returned an error");
+}
+
+TEST_F(GenerationClientTest, Http400ReturnsRequestFailed) {
+    auto mock = std::make_shared<MockHttpClient>();
+    mock->postResult = makeResult(400, "Bad Request");
+
+    GenerationClient client(mock);
+    models::ImageGeneration generation;
+    generation.prompt = "test";
+
+    auto result = client.generate(generation);
+
+    EXPECT_EQ(result.status, models::TaskStatus::Failed);
+    EXPECT_EQ(result.failure_code, std::string(models::failure::kPythonServiceRequestFailed));
+    EXPECT_EQ(result.error_message, "model service rejected the request");
+}
+
+TEST_F(GenerationClientTest, NetworkFailureReturnsRequestFailed) {
+    auto mock = std::make_shared<MockHttpClient>();
+    mock->postResult = makeFailure("connection refused");
+
+    GenerationClient client(mock);
+    models::ImageGeneration generation;
+    generation.prompt = "test";
+
+    auto result = client.generate(generation);
+
+    EXPECT_EQ(result.status, models::TaskStatus::Failed);
+    EXPECT_EQ(result.failure_code, std::string(models::failure::kPythonServiceRequestFailed));
+    EXPECT_EQ(result.error_message, "model service is unavailable");
+}
+
+TEST_F(GenerationClientTest, Http200ParsesExpectedBody) {
+    auto mock = std::make_shared<MockHttpClient>();
+    mock->postResult = makeResult(200, R"({"status":"failed","error_message":"model failed"})");
+
+    GenerationClient client(mock);
+    models::ImageGeneration generation;
+    generation.prompt = "test";
+
+    auto result = client.generate(generation);
+
+    EXPECT_EQ(result.status, models::TaskStatus::Failed);
+    EXPECT_NE(result.failure_code, std::string(models::failure::kPythonServiceRequestFailed));
+    EXPECT_EQ(result.error_message, "model failed");
 }
 
 TEST_F(GenerationClientTest, EmptyResponseBodyReturnsEmptyResponse) {
@@ -238,23 +290,56 @@ TEST_F(GenerationClientTest, NonTerminalStatusCoercedToFailed) {
 
 TEST_F(GenerationClientTest, CheckHealthReturnsHealthy) {
     auto mock = std::make_shared<MockHttpClient>();
-    mock->getResult = makeResult(200, R"({"status":"healthy","model_loaded":true})");
+    mock->getResult = makeResult(
+        200,
+        R"({"status":"healthy","model_loaded":true,"active_kind":"none","active_generations":0,"max_concurrent_generations":1})");
 
     GenerationClient client(mock);
     auto result = client.checkHealth();
 
     EXPECT_EQ(result.status, "healthy");
     EXPECT_TRUE(result.model_loaded);
+    EXPECT_EQ(result.active_kind, "none");
+    EXPECT_EQ(result.active_generations, 0);
+    EXPECT_EQ(result.max_concurrent_generations, 1);
+}
+
+TEST_F(GenerationClientTest, CheckHealthPreservesBusyStatusAndActiveKind) {
+    auto mock = std::make_shared<MockHttpClient>();
+    mock->getResult = makeResult(
+        200,
+        R"({"status":"busy","model_loaded":true,"active_kind":"generate","active_generations":1,"max_concurrent_generations":1})");
+
+    GenerationClient client(mock);
+    auto result = client.checkHealth();
+
+    EXPECT_EQ(result.status, "busy");
+    EXPECT_TRUE(result.model_loaded);
+    EXPECT_EQ(result.active_kind, "generate");
+    EXPECT_EQ(result.active_generations, 1);
+    EXPECT_EQ(result.max_concurrent_generations, 1);
+}
+
+TEST_F(GenerationClientTest, CheckHealthPreservesLoadingStatus) {
+    auto mock = std::make_shared<MockHttpClient>();
+    mock->getResult = makeResult(200, R"({"status":"loading","model_loaded":false})");
+
+    GenerationClient client(mock);
+    auto result = client.checkHealth();
+
+    EXPECT_EQ(result.status, "loading");
+    EXPECT_FALSE(result.model_loaded);
 }
 
 TEST_F(GenerationClientTest, CheckHealthReturnsUnhealthyOnHttpError) {
     auto mock = std::make_shared<MockHttpClient>();
-    mock->getResult = makeResult(500, "", "Internal Server Error");
+    mock->getResult = makeResult(500, "Internal Server Error");
 
     GenerationClient client(mock);
     auto result = client.checkHealth();
 
     EXPECT_EQ(result.status, "unhealthy");
+    EXPECT_EQ(result.detail, "model service returned an error");
 }
 
 TEST_F(GenerationClientTest, CheckHealthReturnsUnhealthyOnEmptyResponse) {
@@ -302,8 +387,9 @@ TEST_F(GenerationClientTest, GenerateUsesConfiguredTimeout) {
     (void)client.generate(generation);
 
     ASSERT_TRUE(mock->lastPostTimeoutSeconds.has_value());
-    // writeTempConfig sets python_service.timeout_seconds = 30
-    EXPECT_EQ(*mock->lastPostTimeoutSeconds, 30L);
+    const auto expectedTimeout =
+        backend::cachedConfig().at("python_service").value("timeout_seconds", 900L);
+    EXPECT_EQ(*mock->lastPostTimeoutSeconds, expectedTimeout);
 }
 
 TEST_F(GenerationClientTest, CheckHealthClampsTimeoutToTenSeconds) {

@@ -1,6 +1,30 @@
 # ZImage Backend 优化计划
 
 > **进度（2026-05-17）：** P1 + P2 全部完成。最终单测 190 个用例全过。详见文末 [进度日志](#进度日志-2026-05-17)。
+>
+> **进度（2026-05-20）：** 新增 [P3 — 上线前差距清单](#p3--上线前差距清单2026-05-20)，按"阻断上线 / 建议补强 / 可选优化"三级整理后端、部署、运营层面的待办项。后端核心代码层面 P2 已闭环，剩余工作主要在部署形态、运营能力与跨层补强。
+>
+> **进度（2026-05-20）：** CODEX-R1 / P2 遗留 1 已完成：`GenerationClient` 已迁移到 `HttpResult::toExpectedBody()`，新增 `mapHttpError()`，并移除旧 `HttpResult::ok()` / `error` 字符串字段。Backend 单测 196 个用例全过。
+>
+> **进度（2026-05-20）：** CODEX-A2 已完成：新增 Redis token bucket 限流、用户活跃任务配额、匿名 IP 登录/注册限流与 `RATE_LIMIT_*` 配置。Backend 单测 208/208 通过，Redis 限流集成测试 3/3 通过。
+>
+> **进度（2026-05-20）：** CODEX-A3 已完成：ModelService healthcheck 会识别 `unhealthy`，`/health` 暴露 `active_kind` 与卡死阈值，TaskEngine 在模型 loading / unhealthy / busy 满载时回滚任务到 `queued` 并退避。Backend 单测 216/216 通过，Backend 集成测试 2/2 通过，ModelService 入口编译检查和 compose 配置校验通过。
+>
+> **进度（2026-05-21）：** CODEX-A1 已完成：生产 compose 前置 Traefik + Let's Encrypt HTTP-01，公网只发布 80/443，frontend/backend/model-service 以及 MySQL/Redis/MinIO 的基础端口映射在 prod overlay 中 reset；新增 `/api/health` 便于 HTTPS 反代验收。Backend 构建、全部 CTest、prod compose 配置校验和 diff 检查通过。
+>
+> **进度（2026-05-21）：** CODEX-A5 已完成：MySQL 启用 ROW binlog，prod `ops` profile 新增 `mysql-backup` 与 `mc-mirror`，提供定时 dump、binlog 归档、S3 兼容对象镜像、MySQL 恢复脚本和备份恢复 runbook。默认 prod compose、ops profile compose、shell 脚本语法检查和 diff 检查通过；真实备份/恢复演练需部署环境执行。
+>
+> **进度（2026-05-21）：** CODEX-B5 已完成：生产环境 `ENV=production` 下 Backend 与 ModelService 均拒绝 wildcard / localhost / 127.0.0.1 / [::1] / 0.0.0.0 CORS origins，`.env.production.example` 与 README 已同步生产域名配置说明。Backend 构建、全部 CTest、ModelService 编译/格式检查、compose 配置校验和 fail-fast 负例通过。
+>
+> **进度（2026-05-21）：** CODEX-A4 已完成：`ModelService/model_service.py` 拆成 6 行入口 + `model_service_app/` 模块（api/pipelines/state/storage/schemas/config），新增 20 个 pytest 用例覆盖 `/generate`、`/health`、状态机、错误映射和临时文件访问；CI 的 `model-service-smoke` 已改为安装依赖、编译入口并运行 pytest。`cd ModelService && python -m pytest tests -v` 20/20 通过。
+>
+> **进度（2026-05-21）：** CODEX-B2 已完成：Backend 暴露 Prometheus 文本 `/metrics`，覆盖请求延迟、任务状态迁移、worker queue depth、DB gauge、ModelService 出站调用耗时；ModelService 暴露 `/metrics`，覆盖健康状态、生成耗时、活跃任务和 GPU 显存；prod `monitoring` profile 新增 Prometheus + Grafana 和预置 dashboard。Backend 构建 / UnitTests、ModelService pytest 21/21、compose monitoring config 校验通过。
+>
+> **进度（2026-05-21）：** CODEX-B1 已完成：Backend 改为 15 分钟 access token + 7 天 refresh token，refresh token `jti` 存 Redis `zimage:refresh:<jti>` 并在 `/api/auth/refresh` rotate、`/api/auth/logout` revoke；前端 axios 401 自动刷新并用 Promise 锁防刷新风暴。Backend 完整 CTest、B1 定向单测、Frontend build、prod compose 配置校验和 diff 检查通过。
+>
+> **进度（2026-05-21）：** CODEX-B4 已完成：新增 `/profile`、`/admin`、`/403`、NotFound 和 App 错误边界；Backend 新增 `/api/auth/me` 与 `/api/auth/password`，改密成功会撤销该用户全部 refresh token 并要求重新登录。Backend 完整 CTest、B4 定向单测、Frontend build、prod compose 配置校验和 diff 检查通过。
+>
+> **进度（2026-05-22）：** CODEX-B3 已完成：生产 compose 改为 Docker Secrets + `*_FILE` secret 引用，Backend 配置加载支持 `DB_PASSWORD_FILE` / `JWT_SECRET_FILE` / `REDIS_PASSWORD_FILE` / `CACHE_PASSWORD_FILE` / `MINIO_SECRET_KEY_FILE`，`.env.production.example` 移除明文 secret 占位，备份/迁移脚本支持 secret 文件，新增 `k8s/secrets.yaml.example`。Backend 构建、完整 CTest、ModelService pytest、Frontend build、prod compose 配置校验、shell 语法检查、secret 明文搜索、clang-format dry-run 和 diff 检查通过。
 
 ## 1. MinIO 客户端连接复用 ✅ 已完成 (4cf7f19)
 
@@ -399,6 +423,63 @@ void handleRequest(const drogon::HttpRequestPtr& req,
 
 ---
 
+## P2 遗留项（小尾巴）
+
+> **背景：** 主线 P1+P2 已闭环，但 plan.md 不同位置散落着三个显式标注的"后续可考虑"项。集中到这里便于追踪。
+
+### 遗留 1 — `HttpResult::toExpectedBody()` 消费方迁移 ✅ 已完成（CODEX-R1）
+
+**出处：** Item 3 落地状态（line 70）+ 2026-05-17 进度日志 PR-C ⚠ 备注（line 483）
+
+**现状：** 已完成生产消费方迁移。`GenerationClient::generate` / `checkHealth` / 图片下载路径都通过 `HttpResult::toExpectedBody()` 消费 HTTP 响应；底层 `HttpResult` 已移除旧 `ok()` 方法和 `error` 字符串字段。
+
+**涉及文件：**
+- `Backend/include/services/i_http_client.h`（`HttpResult` / `HttpError` 定义）
+- `Backend/src/services/generation_client.cpp`（主要消费方）
+- `Backend/src/services/client.cpp`（其他 HTTP 调用点，如有）
+- `Backend/tests/unit/test_generation_client.cpp`（已补网络错误 / 5xx / 4xx / 成功 body 路径）
+- `Backend/include/services/http_error_mapper.h`
+- `Backend/src/services/http_error_mapper.cpp`
+- `Backend/tests/unit/test_http_error_mapper.cpp`
+
+**落地状态（2026-05-20）：**
+- `HttpResult::toExpectedBody()` 成为 `GenerationClient` 的真实生产消费入口
+- 新增 `mapHttpError(const HttpError&) → ServiceError`，按网络错误 / 5xx / 4xx 集中映射模型服务错误
+- `HttpResult` 底层改为 `status_code + body + optional<HttpError> failure`，不再暴露旧 `ok()` / `error` 消费风格
+- 单测从 190 增至 196，新增 `HttpErrorMapper` 覆盖与 `GenerationClient` HTTP 错误路径覆盖
+
+**验证：**
+- `unit_tests.exe --gtest_filter=GenerationClient*:HttpResult*:HttpErrorMapper*`：22/22 通过
+- `unit_tests.exe`：196/196 通过
+
+---
+
+### 遗留 2 — `HttpError` Kind enum 细化
+
+**出处：** Item 3 落地状态 line 71
+
+**现状：** `HttpError` 仅含 `status_code` + `message`，网络错误统一用 `status_code == 0` 表达。
+
+**触发条件（暂未触发）：** 如未来需要区分"网络错误 / 超时 / 解析失败 / BadStatus"等子类型，再加 `Kind` enum。当前调用方无此需求。
+
+**实施提示：** 沿用 `RepoError::Kind` 模式 —— 4-5 种 Kind + classification helper + `std::expected<T, HttpError>` 透传到 Service 层后由 `mapHttpError(HttpError) → ServiceError` 集中映射。
+
+---
+
+### 遗留 3 — `MetricsController` admin guard 抽象
+
+**出处：** Item 7 落地状态 line 169-170
+
+**现状：** Item 7 抽出了 `handler_utils` envelope（`runJsonHandler` / `runAuthenticatedJson` / `respondFromExpected`），但 `MetricsController::getCacheMetrics` 保持原样。
+
+**理由：** admin role guard 目前只有这一个调用点，抽 guard 会早于真实复用需求
+
+**触发条件：** 出现第 2 个 admin 端点时再抽（如 P3-C 的审计日志 endpoint、未来的用户管理 endpoint），避免"单例抽象"
+
+**实施提示：** 在 `handler_utils.h` 新增 `runAdminJson(req, callback, handlerName, body)`，内部先 `resolveUserId` 后查 `UserRepo::isAdmin(userId)`，统一返回 403。
+
+---
+
 ## 进度日志 (2026-05-16)
 
 ### 本会话期间完成
@@ -541,3 +622,386 @@ P2 已闭环。下一步可从新的 P3/部署验证/性能压测中选一条，
 - HttpResult expected 转换：`Backend/include/services/i_http_client.h` 的 `toExpectedBody`
 - std::ranges 集中观察点：`redis_client.cpp::rebuildTaskQueue` / `image_service.cpp::writeListCache` / `string_utils.cpp::parseBool` / `generation_client.cpp::toLower` / `image_controller.cpp::toListJson` / `image_service.cpp::presignListImagesInPlace`
 - Controller handler helper：`Backend/include/controllers/handler_utils.h` / `Backend/src/controllers/handler_utils.cpp`
+
+---
+
+## P3 — 上线前差距清单（2026-05-20）
+
+> **背景：** P2 已闭环，后端核心代码层面没有遗留项。本节按"能否上线"的视角重新审视整套系统，识别出三类差距：阻断上线（必须解决，否则不能面向公网用户）、建议补强（强烈推荐在小流量上线前完成）、可选优化（不影响上线，但运营期会逐步遇到）。
+>
+> **判定原则：** 是否影响**面向公网真实用户**的可用性、安全性、可恢复性。仅做演示 / 内测可豁免 P3-A 部分项。
+>
+> **已具备能力（不在 P3 范围）：** 三层架构、JWT 鉴权 + role 字段、Cache-Aside + 指标 endpoint、worker lease + 过期回收、原子任务认领、`RepoError → ServiceError → HTTP` 错误分层、`docker-compose.prod.yml` 资源限制 + 副本 + 日志切割、`.env.production.example` 完整占位符、DB 版本化迁移、CI（前端 build + Backend 单测 + 集成测 + smoke + compose 校验 + runtime 镜像 build）。
+
+### P3-A 阻断上线（必须解决）
+
+#### A1. HTTPS / TLS 终结层缺失 ✅ 已完成（CODEX-A1）
+
+**问题：** `docker-compose.prod.yml` 直接把 nginx 暴露在 `FRONTEND_PORT=80`，全链路明文。生产暴露在公网会同时面临凭证窃听 + Mixed Content + 浏览器拒绝部分 API（如 Service Worker / Clipboard）。
+
+**涉及文件：**
+- `docker-compose.prod.yml`
+- `ZImageFrontend/nginx.conf` 或新增反向代理服务
+- `.env.production.example`
+
+**方案选项：**
+- **A.** 前置 `traefik` / `caddy`，自动签发 Let's Encrypt 证书。改动小、零额外配置脚本。**推荐**
+- **B.** 用 `nginx-proxy` + `acme-companion` 两个 sidecar 容器
+- **C.** 把 TLS 终结放在云厂商 LB（ALB / Cloud Load Balancer），compose 只跑内网 HTTP
+
+**测试：** 部署后用 `curl -vk https://<domain>` 验证证书链；用 SSL Labs 跑一次 A 级及以上评分。
+
+**落地状态（2026-05-21）：**
+- `docker-compose.prod.yml` 新增 `traefik:v3`，启用 Docker provider、HTTP→HTTPS 重定向、Let's Encrypt HTTP-01、`le` cert resolver，以及 `${TRAEFIK_ACME_CA_SERVER}` staging/production 切换。
+- frontend / backend 通过 Traefik routers 暴露在 `${DOMAIN}`，backend 使用 `Host(...) && PathPrefix('/api')` 并设置更高 priority；WebSocket 继续走 `/api/ws/images`。
+- prod overlay 通过 `ports: !reset []` 清掉基础 compose 的直接宿主机端口映射，只保留 Traefik 的 `${HTTP_PORT:-80}` / `${HTTPS_PORT:-443}`。
+- `Backend/src/main.cpp` 同时注册 `/health` 与 `/api/health`，满足反代后 `https://${DOMAIN}/api/health` 验收。
+- `.env.production.example`、README / README.zh-CN / CLAUDE 文档已补齐 `DOMAIN`、`ACME_EMAIL`、ACME staging、`traefik/acme.json chmod 600`、DNS A 记录和验收命令。
+
+**本地验证：**
+- `docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.prod.yml config --quiet`：通过
+- 展开后的 prod compose：只有 `traefik` 保留宿主机 `80/443` 端口发布；backend / frontend / model-service / MySQL / Redis / MinIO 仅保留 compose 内网 `expose`
+- `cmake --build Backend\out\build\x64-debug --config Debug --target Backend unit_tests integration_tests task_engine_integration_tests --parallel`：通过
+- `ctest --test-dir Backend\out\build\x64-debug -C Debug --output-on-failure`：3/3 通过
+- `git diff --check`：通过（仅 Git 的 LF→CRLF 工作区提示）
+
+**仍需实机验收：** `curl -vk https://${DOMAIN}`、`curl https://${DOMAIN}/api/health`、`curl -I http://${DOMAIN}`、SSL Labs ≥ A、`wss://${DOMAIN}/api/ws/images` 需要真实域名、可公网访问的 80/443 和部署机环境。
+
+---
+
+#### A2. 用户限流 / 任务配额缺失 ✅ 已完成（CODEX-A2）
+
+**问题：** `ImageController::create` 没有任何速率/并发限制。ModelService 单次推理秒级、GPU 资源稀缺，任意登录用户可以无限循环 `POST /api/images` 把 GPU 队列打满，DoS 攻击门槛极低。
+
+**涉及文件：**
+- `Backend/src/controllers/image_controller.cpp`（限流入口）
+- `Backend/src/services/image_service.cpp::create`（业务层并发上限）
+- `Backend/include/services/i_cache_client.h`（如果借 Redis 做 token bucket）
+- `Backend/config.json.example` + `.env.production.example` + `Backend.cpp::applyEnvOverrides`（新增 `rate_limit` 配置节）
+
+**方案：**
+- **每用户并发任务数**（业务层）：`ImageService::create` 前查 `count(*) where user_id=? and status in ('queued','pending','generating')`，超过阈值（如 3）返回 `ServiceError{429, "too_many_active_tasks"}`。
+- **每用户 QPS**（接入层）：Redis token bucket，key `zimage:rate:user:<id>`，`INCR` + `EXPIRE`，超额 429。
+- **匿名 IP 维度限流**（接入层）：覆盖 `/api/auth/register` / `/api/auth/login`，防爆破。
+
+**测试：**
+- 单测：mock Redis，验证 token bucket 边界（漏桶恢复、过期重置）
+- 集成测：并发 N 次 `POST /api/images`，确认第 (并发上限+1) 次返回 429
+- 错误码：用 `ServiceError` 体系扩 `RateLimited(429)` 一种 Kind，复用现有 HTTP 映射
+
+**注意：** 测试相关 fakes 已有 `next_error` 注入字段（见 `image_service_test_fakes.h`），可复用模式。
+
+**落地状态（2026-05-20）：**
+- `ServiceError::tooManyRequests(...)` 统一返回 429，响应体继续使用现有 `code` / `message` 错误信封。
+- 新增 `IRateLimiter` / `RedisTokenBucketLimiter`，用 `SCRIPT LOAD` + `EVALSHA` 缓存 Lua token bucket；Redis 不可用时按 `fail_open` 记录日志并放行。
+- `ImageService::create` 在参数校验后查询 `countActiveTasksByUserId`，非管理员超过 `rate_limit.max_active_tasks_per_user` 时返回 `too_many_active_tasks`。
+- `ImageController::create` 对非管理员使用 `zimage:rate:user:<id>` 做接入层 QPS 限流；`AuthController::registerUser` / `login` 使用 `zimage:rate:ip:<ip>` 做匿名 IP 限流。
+- 新增 `rate_limit` 配置节和 `RATE_LIMIT_*` 环境变量覆盖，已同步 `config.json.example` / `.env.example` / `.env.production.example`。
+
+**验证：**
+- `unit_tests.exe`：208/208 通过
+- `integration_tests.exe --gtest_filter=RateLimiterRedisIntegration.*`：3/3 通过
+
+---
+
+#### A3. ModelService 单点 + 缺 healthcheck ✅ 已完成（CODEX-A3）
+
+**问题：** `MODEL_SERVICE_REPLICAS=1`、模型权重 GB 级、`docker-compose.prod.yml` 没看到 `healthcheck:` 配置。GPU 节点 OOM / 死锁 / pipeline 卡住时 compose 不会自动重启或剔除，请求会一直堆在 Backend worker 上直到 lease 超时。
+
+**涉及文件：**
+- `docker-compose.yml`（healthcheck 通用）+ `docker-compose.prod.yml`（生产副本/资源）
+- `ModelService/model_service.py::/health`（已有，需要确认在 pipeline 卡住时也能返回 unhealthy）
+- `Backend/src/services/task_engine.cpp`（worker 侧需要对 ModelService unhealthy 状态做退避）
+
+**方案：**
+- compose 加 `healthcheck` 段，命令 `curl -fsS http://localhost:8081/health || exit 1`，`interval: 30s` / `timeout: 5s` / `retries: 3` / `start_period: 120s`（等模型加载）
+- `restart: unless-stopped` 已有，配合 healthcheck 自动重启
+- 多副本：`MODEL_SERVICE_REPLICAS=2` + 前面加个 nginx upstream 做轮询（注意 GPU 卡数约束，单卡只能跑 1 个副本）
+- Backend 侧消费 `active_kind` 字段做"忙时退避"（已有，验证逻辑覆盖）
+
+**测试：**
+- 手动 `docker kill` ModelService 容器，观察是否自动恢复
+- pipeline 模拟死锁（在 `model_service.py` 临时插入 `time.sleep(60)`），验证 healthcheck 标 unhealthy
+- Backend 在 ModelService 不可用期间的任务应被标 `failed` 或保留在 `queued` 等待恢复，不应 `lease_expires_at` 超时后直接 `timeout`
+
+**落地状态（2026-05-20）：**
+- `docker-compose.yml` / `docker-compose.prod.yml` 的 ModelService healthcheck 改为 Python JSON 检查：`unhealthy` 返回非 0，`loading` / `busy` / `healthy` 继续视为进程可用；探测参数为 `interval: 30s` / `timeout: 5s` / `retries: 3` / `start_period: 120s`。
+- `ModelService/model_service.py` 新增 `MODEL_SERVICE_BUSY_UNHEALTHY_SECONDS`，`/health` 返回 `active_kind`、`active_seconds`、`active_generations`、`max_concurrent_generations`；生成任务超过阈值未结束时报告 `unhealthy`。
+- `GenerationClient::checkHealth()` 保留远端 `busy` / `loading` / `unhealthy` 状态，不再因为 `model_loaded=true` 把 `busy` 折叠成 `healthy`。
+- `TaskEngine` 在调用 `/generate` 前通过 `model_health::decideForGenerate()` 做门禁；模型 `loading`、`unhealthy` 或 `busy` 且满载时，已 claim 的任务写回 `queued`、清理 worker lease、记录 `model_service_unavailable`，然后按 5s/30s 退避；达到 10 次门禁失败后标记为 `failed`。
+
+**验证：**
+- `unit_tests.exe`：216/216 通过
+- `ctest --test-dir Backend\out\build\x64-debug -C Debug -R IntegrationTests --output-on-failure`：2/2 通过
+- `python -m compileall ModelService\model_service.py ModelService\main.py ModelService\train_lora.py`：通过
+- `docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet`：通过
+
+---
+
+#### A4. ModelService 零测试覆盖 ✅ 已完成（CODEX-A4）
+
+**问题：** `ModelService/tests/` 是空目录（git ls-files 确认无任何 `.py` 测试文件），CI 的 `model-service-smoke` 只做 `python -m compileall`（语法检查）。生成路径、参数校验、错误处理、`/health` 状态机改动都没有任何回归保护。
+
+**涉及文件：**
+- `ModelService/tests/`（新增）
+- `ModelService/requirements.txt`（新增 `pytest`、`pytest-asyncio`、`httpx`）
+- `.github/workflows/ci.yml`（`model-service-smoke` job 加 `pytest` 步骤）
+
+**方案（最小可行覆盖）：**
+- **API 契约测试**：用 FastAPI `TestClient`，覆盖 `/generate` / `/edit` / `/health` 三个端点的 happy path + 参数缺失 + 不支持的 mime
+- **状态机测试**：mock 重型 pipeline，验证 `active_kind` 在 `generate → busy → none` / `edit → busy → none` 路径下的迁移
+- **错误处理**：CUDA OOM 模拟（抛 `torch.cuda.OutOfMemoryError`）→ 返回 503 而不是 500，避免 Backend 误判为永久失败重试耗尽次数
+
+**测试前置：** pipeline 加载本身要 mock，否则 CI 跑不动。可以用 `monkeypatch` 替换 `ZImagePipeline.from_pretrained` 返回一个 stub 对象。
+
+**注意：** 这一项的工作量比看起来大——ModelService 全部代码集中在 `model_service.py` 一个文件里，没有职责拆分，模块边界要先理清才能上 mock。可顺手把"模型加载 / 推理执行 / API 编排"拆成三个 module，再补测试。
+
+**落地状态（2026-05-21）：**
+- `ModelService/model_service.py` 缩到 6 行薄入口，运行方式仍是 `python model_service.py`。
+- 新增 `ModelService/model_service_app/`：
+  - `config.py`：env、日志、路径、CORS fail-fast、模型 dtype/device 配置
+  - `api.py`：FastAPI app factory、路由、请求校验、错误映射、cleanup lifespan
+  - `pipelines.py`：`ZImageModelService`、模型加载、推理封装
+  - `state.py`：`active_kind` / busy / loading / unhealthy 状态机
+  - `storage.py`：临时文件解析与清理
+  - `schemas.py`：Pydantic request/response model
+- 新增 `ModelService/tests/` 20 个 pytest 用例，使用 stub pipeline，不加载真实权重。
+- `requirements.txt` 新增 `pytest>=8`、`pytest-asyncio`、`httpx`。
+- `.github/workflows/ci.yml::model-service-smoke` 改为安装依赖、compileall `model_service.py model_service_app main.py train_lora.py`，再跑 `pytest tests/ -v`。
+- README / README.zh-CN / CLAUDE 已更新 ModelService 测试说明。
+
+**验证：**
+- `cd ModelService; python -m pytest tests -v`：20/20 通过
+- `python -m black --check ModelService\model_service.py ModelService\model_service_app ModelService\tests`：通过
+- `python -m ruff format --check ModelService\model_service.py ModelService\model_service_app ModelService\tests`：通过
+- `python -m compileall ModelService\model_service.py ModelService\model_service_app ModelService\main.py ModelService\train_lora.py`：通过
+- `ModelService/model_service.py`：6 行，满足入口 < 100 行
+
+**说明：** 当前生产 API 只有 `/generate`、`/health`、`/temp/{filename}`，没有 `/edit` 路由；因此 A4 测试覆盖按现有真实契约落地，没有凭空新增 edit 端点。
+
+---
+
+#### A5. MinIO / MySQL 备份策略缺失 ✅ 已完成（CODEX-A5）
+
+**问题：** MinIO 单实例 + MySQL 仅靠 named volume，没有定时备份、binlog 归档、PITR 方案。物理卷损坏或运维误删 = 全量用户数据丢失。
+
+**涉及文件：**
+- `docker-compose.prod.yml`（新增备份 sidecar 或 ops profile）
+- `scripts/`（新增 `backup-mysql.sh` / `backup-minio.sh`）
+- `init-db/01-schema.sql`（不变；用于灾备重建参考）
+
+**方案：**
+- **MySQL：** 在 `--profile ops` 下加 `mysql-backup` 服务，定时 `mysqldump --single-transaction --routines` 到挂载卷或 S3。生产环境强烈建议开 `log-bin` + 归档 binlog 到对象存储，支持 PITR。
+- **MinIO：** 用 `mc mirror` 同步到异地 MinIO / S3。或上 MinIO 分布式部署（4+ 节点 erasure coding），不再依赖外部备份。
+- **恢复演练**：备份只是写入；恢复链路至少要演练一次，写进 runbook。
+
+**测试：** 模拟 MySQL volume 损坏，按 runbook 从最近备份 + binlog 恢复，验证 RPO/RTO 在预期范围内。
+
+**落地状态（2026-05-21）：**
+- `docker-compose.yml::mysql` 启用 `--log-bin=mysql-bin`、`--binlog-format=ROW`、`--binlog-expire-logs-seconds=${MYSQL_BINLOG_EXPIRE_SECONDS:-1209600}`。
+- `docker-compose.prod.yml` 在 `ops` profile 下新增 `mysql-backup`，每天 `${MYSQL_BACKUP_TIME_UTC:-02:00}` UTC 生成 `mysqldump --single-transaction --routines --triggers --events --source-data=2` 的 gzip 备份，并归档 `mysql-bin.*`。
+- `docker-compose.prod.yml` 在 `ops` profile 下新增 `mc-mirror`，每天 `${MINIO_MIRROR_TIME_UTC:-03:00}` UTC 将 MinIO bucket 与 MySQL 备份 volume 镜像到 S3 兼容远端。
+- 新增 `scripts/restore-mysql.sh`，支持从指定 `.sql.gz` 恢复，并可按 `--binlog-dir` + `--until` 做 PITR 辅助恢复。
+- 新增 `docs/runbook-backup-restore.md`，明确 RPO ≤ 24h、RTO ≤ 2h、每周抽查恢复、每季度完整演练、手动触发备份/镜像命令和恢复步骤。
+- `.env.production.example` 新增 `MYSQL_BACKUP_*`、`MINIO_MIRROR_*`、`BACKUP_S3_*`、`MYSQL_BINLOG_EXPIRE_SECONDS` 占位符。
+
+**本地验证：**
+- `docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.prod.yml config --quiet`：通过
+- `docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.prod.yml --profile ops config --quiet`：通过
+- `bash -n scripts/backup-mysql.sh scripts/mirror-minio.sh scripts/restore-mysql.sh`：通过
+- `git diff --check`：通过（仅 Git 的 LF→CRLF 工作区提示）
+
+**仍需实机验收：** 手动触发一次 `mysql-backup`、一次 `mc-mirror`，确认远端 S3 对象存在；在测试库执行一次 `scripts/restore-mysql.sh` 恢复并校验数据一致性；用 `SHOW BINARY LOGS` 确认 binlog 列表。
+
+---
+
+### P3-B 建议补强（小流量上线前完成）
+
+#### B1. JWT 刷新 / 撤销机制 ✅ 已完成（CODEX-B1）
+
+**问题：** `JWT_EXPIRATION_HOURS=24` + 静态 `JWT_SECRET` + 无黑名单。密钥泄露或用户主动登出场景下，token 在过期前一直有效。
+
+**方案：**
+- 短期 access token（15 分钟）+ 长期 refresh token（7 天），refresh token 存 DB 可吊销
+- 或者维护 Redis 黑名单 `zimage:jwt:revoked:<jti>`，登出 / 强制下线时写入，`jwt_middleware` 验证时多查一次
+- 引入 `jti` claim 让单个 token 可识别
+
+**取舍：** 黑名单方案破坏 JWT "无状态" 优势，但实施成本最低。如果未来要做"管理员强制下线某用户"，建议直接走 refresh token 方案。
+
+**落地状态（2026-05-21）：**
+- `utils::createToken()` 现在签发短期 access token，包含 `exp`、`type=access`、`jti`、`role`；默认 TTL 为 `JWT_ACCESS_EXPIRATION_MINUTES=15`。
+- 新增 `utils::issueRefreshToken()` / `verifyRefreshToken()`，refresh token 包含 `type=refresh` 和 UUID v4 `jti`，默认 TTL 为 `JWT_REFRESH_EXPIRATION_DAYS=7`。
+- 新增 `IRefreshTokenStore`、`RedisRefreshTokenStore`、`InMemoryRefreshTokenStore`。生产路径使用 Redis key `zimage:refresh:<jti>` 保存 user id，并用原子 get+del 完成 refresh rotate；测试路径用内存 store 避免把 DB-only 集成测试绑定到 Redis。
+- `/api/auth/login` 返回 `{access_token, refresh_token, expires_in: 900, user}`，并保留旧字段 `token` 兼容现有前端。
+- 新增 `/api/auth/refresh`：验证 refresh token 后消费旧 `jti`，读取当前用户信息并签发新的 access/refresh pair；已 rotate 的旧 refresh token 再次使用会返回 `401 refresh_token_revoked`。
+- 新增 `/api/auth/logout`：撤销提交的 refresh token；access token 不做黑名单，按 15 分钟 TTL 自然过期。
+- 前端 `request.js` 在 access token 过期或 API 返回 401 时自动调用 `/api/auth/refresh`，并用全局 `refreshPromise` 合并并发 401，避免刷新风暴；`auth` store 保存 `refreshToken` 并在 logout 时 best-effort revoke。
+- `config.json.example`、`.env.example`、`.env.production.example`、`docker-compose.yml` 已从 `JWT_EXPIRATION_HOURS` 迁移到 `JWT_ACCESS_EXPIRATION_MINUTES` + `JWT_REFRESH_EXPIRATION_DAYS`；旧 `JWT_EXPIRATION_HOURS` env 仅作为兼容转换。
+
+**验证：**
+- `cmake --build Backend\out\build\x64-debug --config Debug --target Backend unit_tests --parallel`：通过
+- `cmake --build Backend\out\build\x64-debug --config Debug --target Backend unit_tests integration_tests task_engine_integration_tests --parallel`：通过
+- `ctest --test-dir Backend\out\build\x64-debug -C Debug --output-on-failure`：3/3 通过
+- `unit_tests.exe --gtest_filter=JWT.*:AuthRefresh.*`：17/17 通过，覆盖 access 过期、refresh 过期、refresh rotate、logout revoke、旧 refresh 失效
+- `unit_tests.exe --gtest_filter=AuthServiceRepoErrors.*:ControllerRateLimit.LoginReturns429WhenIpBucketIsExceeded:ControllerRateLimit.RegisterReturns429WhenIpBucketIsExceeded`：5/5 通过
+- `cd ZImageFrontend; npm run build`：通过
+- `docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.prod.yml config --quiet`、`--profile ops`、`--profile monitoring`：通过
+- `git diff --check`：通过（仅 Git 的 LF→CRLF 工作区提示）
+
+---
+
+#### B2. 可观测性 — 仅有 `/api/metrics/cache` ✅ 已完成（CODEX-B2）
+
+**问题：** 当前只有缓存命中率指标，没有：请求 QPS / 延迟分布、ModelService 推理耗时分布、worker 队列长度、MinIO 写入失败率、MySQL 慢查询、JVM/系统层指标。运营期出问题只能 `docker logs`。
+
+**方案：**
+- Backend 接入 `prometheus-cpp` 暴露 `/metrics`（QPS / latency histogram / worker queue depth / lease 过期次数 / DB pool 饱和度）
+- ModelService 接 `prometheus-client` 暴露推理时长、显存占用、active_kind 状态
+- 部署 Prometheus + Grafana sidecar（或外部托管），加入 `docker-compose.prod.yml`
+- 日志聚合走 Loki / ELK，至少把 spdlog 输出格式标准化（JSON 行式 + 固定字段 `trace_id` / `user_id` / `task_id`）
+
+**先做最小集：** Backend 加 `/metrics`，导出 `image_task_total{status=...}` / `image_request_duration_seconds`；其余可分阶段补。
+
+**落地状态（2026-05-21）：**
+- Backend 新增 `services/metrics_registry.h/.cpp`，渲染 Prometheus text exposition format；`GET /metrics` 不走 admin guard，`GET /api/metrics/cache` 仍保持 admin-only JSON。
+- `handler_utils` 自动记录 JSON controller 请求耗时到 `image_request_duration_seconds{endpoint,status}`。
+- `ImageService` / `TaskEngine` 记录 `image_task_total{status}`，并维护近似 `worker_queue_depth`。
+- `GenerationClient` 记录 `/health`、`/generate`、`/temp` 的 `model_service_call_duration_seconds{endpoint,status}`。
+- `ModelService/model_service_app/metrics.py` 基于 `prometheus-client` 暴露 `model_service_generation_seconds`、`model_service_generation_total`、`model_service_active_generations`、`model_service_health_status`、`model_service_gpu_memory_allocated_bytes`。
+- `docker-compose.prod.yml` 新增 `monitoring` profile：Prometheus 抓取 `backend:8080/metrics` 和 `model-service:8081/metrics`；Grafana 预置 `monitoring/dashboards/zimage.json`。
+- `Backend/vcpkg.json` 加入 `prometheus-cpp`，`ModelService/requirements.txt` 加入 `prometheus-client`。
+
+**验证：**
+- `cmake --build Backend\out\build\x64-debug --config Debug --target Backend unit_tests --parallel`：通过（首次 glob 刷新后重跑通过）
+- `unit_tests.exe --gtest_filter=MetricsRegistryTest.*`：3/3 通过
+- `ctest --test-dir Backend\out\build\x64-debug -C Debug -R UnitTests --output-on-failure`：通过
+- `cd ModelService; python -m pytest tests -v`：21/21 通过
+- `python -m compileall ModelService\model_service.py ModelService\model_service_app ModelService\main.py ModelService\train_lora.py`：通过
+- `docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.prod.yml --profile monitoring config --quiet`：通过
+
+**仍需实机验收：** 启动 `--profile monitoring` 后访问本机 `PROMETHEUS_PORT` / `GRAFANA_PORT`，确认 dashboard 能看到真实流量曲线；如生产端口不是 8080/8081，需要同步调整 `monitoring/prometheus.yml`。
+
+---
+
+#### B3. Secrets 管理 ✅ 已完成（CODEX-B3）
+
+**问题：** `JWT_SECRET` / `MYSQL_ROOT_PASSWORD` / `MINIO_ROOT_PASSWORD` 全部走 `.env`，文件落盘在主机上。开发机 / CI runner / 主机被入侵 = 密钥全失守。
+
+**方案：**
+- Docker Swarm：用 `docker secret`，compose 引用 `secrets:` 段
+- K8s：迁到 `Secret` 对象 + Sealed Secrets / External Secrets
+- 单机部署：至少把 `.env` 文件权限改成 `chmod 600` + 不要进版本控制（已 gitignore）
+
+**落地状态（2026-05-22）：**
+- `Backend.cpp::applyEnvOverrides` 新增文件型 secret 读取：`DB_PASSWORD_FILE`、`JWT_SECRET_FILE`、`REDIS_PASSWORD_FILE`、`CACHE_PASSWORD_FILE`、`MINIO_SECRET_KEY_FILE`。`*_FILE` 优先于明文 env；文件不可读或为空会在启动加载配置时抛出包含变量名和路径的明确错误。
+- `docker-compose.prod.yml` 新增 external Docker secrets：`jwt_secret`、`db_password`、`mysql_root_password`、`redis_password`、`minio_password`、`backup_s3_access_key`、`backup_s3_secret_key`、`grafana_admin_password`。
+- 生产 overlay 中 Backend、MySQL、Redis、MinIO、db-migrate、mysql-backup、mc-mirror、Grafana 均改为通过 `/run/secrets/*` 或官方 `*_FILE` 变量消费 secret，prod compose 不再渲染明文密码 / JWT secret。
+- `.env.production.example` 移除 `JWT_SECRET=`、`DB_PASSWORD=`、`REDIS_PASSWORD=`、`CACHE_PASSWORD=`、`MINIO_ROOT_PASSWORD=`、`BACKUP_S3_*KEY=`、`GRAFANA_ADMIN_PASSWORD=` 等明文字段，改为 `*_FILE=/run/secrets/...` 与 secret name 配置。
+- `scripts/run-db-migrations.sh`、`backup-mysql.sh`、`mirror-minio.sh`、`restore-mysql.sh` 支持 `*_FILE` secret 输入，并对缺失/空文件给出明确错误。
+- 新增 `k8s/secrets.yaml.example`，记录 K8s / Sealed Secrets 路径的示例和不要提交明文 Secret 的提示。
+- README / README.zh-CN / CLAUDE / backup runbook 已同步 Docker Secrets 创建、`.env.production chmod 600` 和生产 `.env` 不落明文 secret 的说明。
+
+**验证：**
+- `cmake --build Backend\out\build\x64-debug --config Debug --target Backend unit_tests integration_tests task_engine_integration_tests --parallel`：通过
+- `unit_tests.exe --gtest_filter=BackendConfig.*:MysqlConfig.*`：10/10 通过，覆盖 `*_FILE` 优先级、明文 env fallback、缺失 secret 文件、空 secret 文件。
+- `ctest --test-dir Backend\out\build\x64-debug -C Debug --output-on-failure`：3/3 通过
+- `cd ModelService; python -m pytest tests -v`：21/21 通过
+- `cd ZImageFrontend; npm run build`：通过
+- `docker compose --env-file .env.example -f docker-compose.yml config --quiet`：通过
+- `docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.prod.yml config --quiet`、`--profile ops`、`--profile monitoring`：通过
+- `bash -n scripts/backup-mysql.sh scripts/mirror-minio.sh scripts/restore-mysql.sh scripts/run-db-migrations.sh`：通过
+- `.env.production.example` 明文 secret 搜索无匹配；渲染后的 prod config 未出现明文 password / secret / key（仅保留非 secret 的 `MINIO_ACCESS_KEY` 用户名）。
+- `clang-format --dry-run --Werror Backend/src/Backend.cpp Backend/tests/unit/test_db_config.cpp`：通过
+- `git diff --check`：通过（仅 Git 的 LF→CRLF 工作区提示）
+
+---
+
+#### B4. 前端只有 3 个 view ✅ 已完成（CODEX-B4）
+
+**问题：** `src/views/` 仅 `Home.vue` / `Login.vue` / `Register.vue`。需要核实 `Home.vue` 是否承载了所有功能（任务列表、生成表单、详情查看、取消重试、个人设置、错误页 404/500），否则用户体验完整度不够。
+
+**方案：**
+- 至少补 `NotFound.vue` + 全局错误边界
+- 拆出 `Profile.vue`（用户信息 + 修改密码）
+- 如果有 admin 用户，应该有 `Admin.vue`（消费 `/api/metrics/cache`）
+
+**落地状态（2026-05-21）：**
+- 新增 `ZImageFrontend/src/views/NotFound.vue`，catch-all 路由显示 404；普通用户访问 `/admin` 会跳转 `/403`。
+- 新增 `ZImageFrontend/src/views/Profile.vue`，展示用户名、邮箱、角色、注册时间占位，并提供改密表单。
+- 新增 `ZImageFrontend/src/views/Admin.vue`，复用 `CacheMetricsPanel` 展示 admin-only cache metrics。
+- `router/index.js` 新增 `/profile`、`/admin`、`/403` 与 catch-all 路由，并用 `requiresAdmin` 守卫保护 `/admin`。
+- `Home.vue` 用户菜单新增个人中心和管理面板入口。
+- `App.vue` 增加 `onErrorCaptured` 错误边界，使用 `el-result` 展示运行时错误。
+- `auth.js` 新增 `getProfile()` / `changePassword()`。
+- Backend 新增 `/api/auth/me` GET 与 `/api/auth/password` PUT；改密校验旧密码和新密码长度，成功后通过 `IRefreshTokenStore::revokeUser()` 撤销该用户全部 refresh token，前端随后清理本地 auth 状态并跳转登录。
+- `RedisRefreshTokenStore` 新增 user 维度索引 `zimage:refresh:user:<userId>`，支持改密后批量撤销 refresh token。
+
+**验证：**
+- `cmake --build Backend\out\build\x64-debug --config Debug --target Backend unit_tests --parallel`：通过
+- `cmake --build Backend\out\build\x64-debug --config Debug --target Backend unit_tests integration_tests task_engine_integration_tests --parallel`：通过
+- `ctest --test-dir Backend\out\build\x64-debug -C Debug --output-on-failure`：3/3 通过
+- `unit_tests.exe --gtest_filter=AuthRefresh.*:AuthProfile.*:JWT.*`：21/21 通过，覆盖 profile、旧密码错误、新密码过短、改密后全部 refresh token 失效、新密码可登录
+- `unit_tests.exe --gtest_filter=AuthServiceRepoErrors.*`：3/3 通过
+- `cd ZImageFrontend; npm run build`：通过
+- `docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.prod.yml config --quiet`、`--profile ops`、`--profile monitoring`：通过
+- `git diff --check`：通过（仅 Git 的 LF→CRLF 工作区提示）
+
+---
+
+#### B5. CORS 默认值是开发地址 ✅ 已完成（CODEX-B5）
+
+**问题：** `model_service.py::ALLOW_ORIGINS` 默认 `["http://localhost:3000"]`，部署时必须靠 env override。如果运维忘记设置，前端报跨域错。
+
+**方案：**
+- 在 `.env.production.example` 显式列出 `MODEL_SERVICE_ALLOW_ORIGINS=https://your-domain.com`
+- 启动时如果 origins 包含 `localhost` 且 `ENV=production`，打 warning（或直接 fail-fast）
+
+**注意：** 实际上前端不直接调 ModelService（架构图 Frontend → Backend → ModelService），所以这条优先级不高，但留个口子防止后续接入新前端时翻车。
+
+**落地状态（2026-05-21）：**
+- `ModelService/model_service.py` 读取 `ENV`，生产环境拒绝 `*`、`localhost`、`127.0.0.1`、`[::1]`、`0.0.0.0` origins；非生产保留 `*` warning。
+- `Backend.cpp::applyEnvOverrides` 新增 `CORS_ENABLED` / `CORS_ALLOW_ORIGINS` 覆盖，支持逗号分隔 origins。
+- `Backend/src/main.cpp` 在启动早期校验生产 CORS，命中 wildcard/local origins 时 fail-fast。
+- `docker-compose.yml` 将 `ENV`、Backend CORS env、ModelService CORS env 注入容器；`.env.production.example` 设置 `ENV=production`、`CORS_ALLOW_ORIGINS=https://CHANGE_ME_DOMAIN`、`MODEL_SERVICE_ALLOW_ORIGINS=https://CHANGE_ME_DOMAIN`。
+- README / README.zh-CN / CLAUDE 已补生产 CORS 配置说明。
+
+**验证：**
+- `cmake --build Backend\out\build\x64-debug --config Debug --target Backend unit_tests integration_tests task_engine_integration_tests --parallel`：通过
+- `ctest --test-dir Backend\out\build\x64-debug -C Debug --output-on-failure`：3/3 通过
+- `python -m black --check ModelService\model_service.py`：通过
+- `python -m ruff format --check ModelService\model_service.py`：通过
+- `python -m compileall ModelService\model_service.py ModelService\main.py ModelService\train_lora.py`：通过
+- `docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.prod.yml config --quiet`：通过
+- `docker compose --env-file .env.production.example -f docker-compose.yml -f docker-compose.prod.yml --profile ops config --quiet`：通过
+- 负例：`ENV=production` + `MODEL_SERVICE_ALLOW_ORIGINS=http://localhost:3000` 时 ModelService import 直接报错退出
+- 负例：`ENV=production` + Backend 默认 localhost CORS 时 Backend 直接报 `Fatal startup error: CORS allow_origins contains unsafe production origins`
+
+---
+
+### P3-C 可选优化（运营期逐步遇到）
+
+- **OpenAPI / Swagger 文档**：当前 API 表只在 README 手写。Drogon 不原生支持 OpenAPI；可手动维护 `openapi.yaml` 或借助 `nlohmann::json::meta()` 反射生成
+- **审计日志**：删除 / 取消 / 重试等敏感操作单独写审计表，至少存 `user_id / action / resource_id / timestamp / ip`
+- **压测数据**：plan.md 自己写了"下一步可从新的 P3/部署验证/性能压测中选一条"。建议至少跑一次 `wrk` / `k6` 找出 Backend 单实例 QPS 上限、worker 池调优参数
+- **`train_lora.py` 镜像隔离**：确认 `ModelService/Dockerfile` 没有把 LoRA 训练工具包含进 runtime 镜像（推理服务不需要 transformers 训练依赖）
+- **数据库连接池调优**：`task_engine.workers` 增大时 MySQL 连接数会同步增长，需要确认 pool 上限和 worker 数的关系（生产 `BACKEND_REPLICAS=2` × `TASK_ENGINE_WORKERS=2` × DB pool 不应超过 `max_connections`）
+- **请求 trace ID**：跨 Backend / ModelService 透传 `X-Request-Id`，便于排查跨服务问题
+
+---
+
+### 落地优先级建议
+
+如果资源有限，按以下顺序推进：
+
+1. **第一阶段（阻断 → 可上线）：** A1 HTTPS + A2 限流 + A3 ModelService healthcheck → 可以小范围内测
+2. **第二阶段（备份 + 测试）：** A4 ModelService 测试 + A5 备份 → 数据可恢复，回归有保护
+3. **第三阶段（可观测）：** B2 监控 + B1 JWT 刷新 + B3 secrets → 可以放心面向真实用户
+4. **第四阶段（运营完善）：** B4 前端补全 + B5 CORS + C 系列优化
+
+预估第一 + 第二阶段大概 1-2 周专注工作量，看是否接入 K8s / 云资源可能再加 3-5 天。
+
+---
+
+### 下一次会话从这里继续
+
+P3 已成清单；CODEX-R1 / P2 遗留 1、CODEX-A1（HTTPS / TLS 终结层）、CODEX-A2（限流 / 任务配额）、CODEX-A3（ModelService healthcheck + Backend 退避）、CODEX-A4（ModelService 测试）、CODEX-A5（备份 / 灾难恢复）、CODEX-B1（JWT 刷新 / 撤销）、CODEX-B2（Prometheus / Grafana）、CODEX-B3（Secrets）、CODEX-B4（前端补全）、CODEX-B5（生产 CORS fail-fast）已落地。上线阻断项和建议补强项已全部落地，之后视需要补 C 系列运营优化。

@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "services/metrics_registry.h"
 #include "utils/jwt_utils.h"
 
 namespace {
@@ -56,5 +57,14 @@ void MetricsController::getCacheMetrics(
         resp->setStatusCode(drogon::HttpStatusCode::k503ServiceUnavailable);
         resp->setBody(R"({"error": "Cache metrics not initialized"})");
     }
+    callback(resp);
+}
+
+void MetricsController::getPrometheusMetrics(
+    const drogon::HttpRequestPtr&, std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+    auto resp = drogon::HttpResponse::newHttpResponse();
+    resp->setStatusCode(drogon::k200OK);
+    resp->setContentTypeString("text/plain; version=0.0.4; charset=utf-8");
+    resp->setBody(metrics::MetricsRegistry::instance().renderPrometheus());
     callback(resp);
 }

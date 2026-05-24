@@ -12,6 +12,7 @@
 
 #include "Backend.h"
 #include "database/ImageRepo.h"
+#include "services/refresh_token_store.h"
 #include "utils/string_utils.h"
 
 namespace test_support {
@@ -123,6 +124,7 @@ void ensureUsersTable() {
             email VARCHAR(255) NOT NULL,
             password VARCHAR(255) NOT NULL,
             nickname VARCHAR(128) NOT NULL DEFAULT '',
+            role VARCHAR(32) NOT NULL DEFAULT 'user',
             enabled BOOLEAN NOT NULL DEFAULT TRUE,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -131,6 +133,20 @@ void ensureUsersTable() {
         )
     )")
         .execute();
+
+    auto roleColumn =
+        database::DBManager::threadSession()
+            .sql("SELECT COUNT(*) FROM information_schema.columns "
+                 "WHERE table_schema = ? AND table_name = 'users' AND column_name = 'role'")
+            .bind(cfg.database)
+            .execute();
+    const auto row = roleColumn.fetchOne();
+    if (row && !row[0].isNull() && row[0].get<uint64_t>() == 0) {
+        database::DBManager::threadSession()
+            .sql("ALTER TABLE " + qualifiedName(cfg.database, "users") +
+                 " ADD COLUMN role VARCHAR(32) NOT NULL DEFAULT 'user' AFTER nickname")
+            .execute();
+    }
 }
 
 void ensureImageTable() {
@@ -174,6 +190,7 @@ void ensureTestDatabase() {
             .execute();
 
         database::DBManager::init(cfg);
+        setDefaultRefreshTokenStoreForTesting(std::make_shared<InMemoryRefreshTokenStore>());
         ensureUsersTable();
         ensureImageTable();
     });

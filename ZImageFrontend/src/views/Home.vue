@@ -30,6 +30,14 @@
                       <div class="user-email">{{ authStore.userInfo?.email || '' }}</div>
                     </div>
                   </el-dropdown-item>
+                  <el-dropdown-item command="profile">
+                    <el-icon><User /></el-icon>
+                    个人中心
+                  </el-dropdown-item>
+                  <el-dropdown-item v-if="authStore.isAdmin" command="admin">
+                    <el-icon><Setting /></el-icon>
+                    管理面板
+                  </el-dropdown-item>
                   <el-dropdown-item divided command="logout">
                     <el-icon><SwitchButton /></el-icon>
                     退出登录
@@ -56,14 +64,16 @@
 
 <script setup>
 import { ref, onMounted, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
-import { Picture, Avatar, ArrowDown, SwitchButton } from '@element-plus/icons-vue';
+import { Picture, Avatar, ArrowDown, SwitchButton, User, Setting } from '@element-plus/icons-vue';
 import { ElMessageBox } from 'element-plus';
 import ImageGenerator from '@/components/ImageGenerator.vue';
 import ImageHistory from '@/components/ImageHistory.vue';
 import CacheMetricsPanel from '@/components/CacheMetricsPanel.vue';
 
 const authStore = useAuthStore();
+const router = useRouter();
 const activeTab = ref('generator');
 
 const handleTabChange = (key) => {
@@ -76,6 +86,16 @@ const handleTabChange = (key) => {
 };
 
 const handleCommand = (command) => {
+  if (command === 'profile') {
+    router.push('/profile');
+    return;
+  }
+
+  if (command === 'admin') {
+    router.push('/admin');
+    return;
+  }
+
   if (command === 'logout') {
     ElMessageBox.confirm('确定要退出登录吗？', '提示', {
       confirmButtonText: '确定',

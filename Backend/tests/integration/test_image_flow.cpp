@@ -109,7 +109,8 @@ TEST_F(ImageFlowTest, ListMyReturnsCreatedTasks) {
 TEST_F(ImageFlowTest, ListMyPagination) {
     ImageService service;
     for (int i = 0; i < 5; ++i) {
-        (void)service.create(userId_, {{"prompt", "task " + std::to_string(i)}});
+        auto created = service.create(userId_, {{"prompt", "task " + std::to_string(i)}}, true);
+        ASSERT_TRUE(created.has_value());
     }
 
     auto page0 = service.listMy(userId_, 0, 2);

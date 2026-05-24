@@ -29,7 +29,7 @@ class ImageService {
     static void setPresignTtl(std::chrono::seconds ttl);
 
     [[nodiscard]] std::expected<ImageCreateResult, ServiceError>
-    create(int64_t userId, const nlohmann::json& payload) const;
+    create(int64_t userId, const nlohmann::json& payload, bool isAdmin = false) const;
 
     [[nodiscard]] std::expected<ImageListResult, ServiceError> listMy(int64_t userId, int page,
                                                                       int size) const;

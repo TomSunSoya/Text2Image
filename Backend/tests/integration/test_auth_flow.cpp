@@ -70,7 +70,9 @@ TEST_F(AuthFlowTest, LoginByUsernameSuccess) {
 
     auto login = service.login({{"username", "dave"}, {"password", "mypass123"}});
     ASSERT_TRUE(login.has_value());
-    EXPECT_FALSE(login->token.empty());
+    EXPECT_FALSE(login->access_token.empty());
+    EXPECT_FALSE(login->refresh_token.empty());
+    EXPECT_EQ(login->expires_in, 900);
     EXPECT_EQ(login->user.username, "dave");
 }
 
@@ -117,7 +119,7 @@ TEST_F(AuthFlowTest, LoginTokenCanBeVerified) {
     auto login = service.login({{"username", "grace"}, {"password", "pass123456"}});
     ASSERT_TRUE(login.has_value());
 
-    auto payload = utils::verifyToken(login->token);
+    auto payload = utils::verifyToken(login->access_token);
     ASSERT_TRUE(payload.has_value());
     EXPECT_EQ(payload->username, "grace");
     EXPECT_GT(payload->user_id, 0);

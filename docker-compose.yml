@@ -20,6 +20,9 @@ services:
       - --mysqlx=ON
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --binlog-expire-logs-seconds=${MYSQL_BINLOG_EXPIRE_SECONDS:-1209600}
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-CHANGE_ME_ROOT}
       MYSQL_DATABASE: ${DB_NAME:-image_generator}
@@ -76,12 +79,14 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
+      ENV: ${ENV:-development}
       MODEL_SERVICE_PORT: ${MODEL_SERVICE_PORT:-8081}
       MODEL_PATH: ${MODEL_PATH:-/app/models/Z-Image-Turbo}
       MODEL_SERVICE_ALLOW_ORIGINS: ${MODEL_SERVICE_ALLOW_ORIGINS:-*}
       MODEL_SERVICE_LOG_DIR: ${MODEL_SERVICE_LOG_DIR:-/app/logs}
       MODEL_SERVICE_TEMP_DIR: ${MODEL_SERVICE_TEMP_DIR:-/app/temp}
       MODEL_SERVICE_MAX_CONCURRENT_GENERATIONS: ${MODEL_SERVICE_MAX_CONCURRENT_GENERATIONS:-1}
+      MODEL_SERVICE_BUSY_UNHEALTHY_SECONDS: ${MODEL_SERVICE_BUSY_UNHEALTHY_SECONDS:-60}
       MODEL_SERVICE_TEMP_FILE_MAX_AGE_HOURS: ${MODEL_SERVICE_TEMP_FILE_MAX_AGE_HOURS:-24}
       MODEL_SERVICE_TEMP_FILE_CLEANUP_INTERVAL_SECONDS: ${MODEL_SERVICE_TEMP_FILE_CLEANUP_INTERVAL_SECONDS:-3600}
     ports:
@@ -94,12 +99,12 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${MODEL_SERVICE_PORT:-8081}/health').read()\"",
+          "python -c \"import json,sys,urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:${MODEL_SERVICE_PORT:-8081}/health', timeout=3)); sys.exit(1 if data.get('status') == 'unhealthy' else 0)\"",
         ]
       interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
 
   backend:
     build:
@@ -107,17 +112,23 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
+      ENV: ${ENV:-development}
       BACKEND_HOST: 0.0.0.0
       BACKEND_PORT: ${BACKEND_PORT:-8080}
       BACKEND_THREADS: ${BACKEND_THREADS:-4}
+      CORS_ENABLED: ${CORS_ENABLED:-true}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
       DB_HOST: mysql
       DB_PORT: ${DB_PORT:-33060}
       DB_USERNAME: ${DB_USERNAME:-app}
       DB_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
+      DB_PASSWORD_FILE: ${DB_PASSWORD_FILE:-}
       DB_NAME: ${DB_NAME:-image_generator}
       DB_SSL: ${DB_SSL:-false}
       JWT_SECRET: ${JWT_SECRET:-CHANGE_ME}
-      JWT_EXPIRATION_HOURS: ${JWT_EXPIRATION_HOURS:-24}
+      JWT_SECRET_FILE: ${JWT_SECRET_FILE:-}
+      JWT_ACCESS_EXPIRATION_MINUTES: ${JWT_ACCESS_EXPIRATION_MINUTES:-15}
+      JWT_REFRESH_EXPIRATION_DAYS: ${JWT_REFRESH_EXPIRATION_DAYS:-7}
       PYTHON_SERVICE_URL: ${PYTHON_SERVICE_URL:-http://model-service:8081}
       PYTHON_SERVICE_TIMEOUT_SECONDS: ${PYTHON_SERVICE_TIMEOUT_SECONDS:-360}
       TASK_ENGINE_WORKERS: ${TASK_ENGINE_WORKERS:-2}
@@ -131,6 +142,7 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-CHANGE_ME_MINIO_PASSWORD}
+      MINIO_SECRET_KEY_FILE: ${MINIO_SECRET_KEY_FILE:-}
       MINIO_BUCKET: ${MINIO_BUCKET:-zimage}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       MINIO_PRESIGN_EXPIRY_SECONDS: ${MINIO_PRESIGN_EXPIRY_SECONDS:-3600}
@@ -138,6 +150,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
+      REDIS_PASSWORD_FILE: ${REDIS_PASSWORD_FILE:-}
       REDIS_DB: ${REDIS_DB:-0}
       REDIS_POOL_SIZE: ${REDIS_POOL_SIZE:-4}
       REDIS_CONNECT_TIMEOUT_MS: ${REDIS_CONNECT_TIMEOUT_MS:-1000}
@@ -148,6 +161,7 @@ services:
       CACHE_HOST: ${CACHE_HOST:-redis}
       CACHE_PORT: ${CACHE_PORT:-6379}
       CACHE_PASSWORD: ${CACHE_PASSWORD:-CHANGE_ME_REDIS_PASSWORD}
+      CACHE_PASSWORD_FILE: ${CACHE_PASSWORD_FILE:-}
       CACHE_DB: ${CACHE_DB:-1}
       CACHE_POOL_SIZE: ${CACHE_POOL_SIZE:-4}
       CACHE_CONNECT_TIMEOUT_MS: ${CACHE_CONNECT_TIMEOUT_MS:-1000}
@@ -214,6 +228,7 @@ services:
       MYSQL_DATABASE: ${DB_NAME:-image_generator}
       MYSQL_USER: ${DB_USERNAME:-app}
       MYSQL_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
+      MYSQL_PASSWORD_FILE: ${MYSQL_PASSWORD_FILE:-}
       MIGRATIONS_DIR: /migrations
     volumes:
       - ./init-db/migrations:/migrations:ro

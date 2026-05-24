@@ -3,7 +3,13 @@ import { ref, computed } from 'vue';
 import { authApi } from '@/api/auth';
 import router from '@/router';
 import { ElMessage } from 'element-plus';
-import { clearStoredAuth, isTokenExpired } from '@/utils/jwt';
+import {
+  clearStoredAuth,
+  getStoredAccessToken,
+  getStoredRefreshToken,
+  isTokenExpired,
+  setStoredAuth,
+} from '@/utils/jwt';
 import { closeTaskSocket } from '@/utils/taskSocket';
 
 function normalizeUserInfo(rawUser, fallbackUsername = '') {
@@ -19,17 +25,23 @@ function normalizeUserInfo(rawUser, fallbackUsername = '') {
 }
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref(localStorage.getItem('token') || '');
+  const token = ref(getStoredAccessToken());
+  const refreshToken = ref(getStoredRefreshToken());
   const userInfo = ref(JSON.parse(localStorage.getItem('userInfo') || 'null'));
   const isLoggingIn = ref(false);
 
-  const isAuthenticated = computed(() => !!token.value && !isTokenExpired(token.value));
+  const isAuthenticated = computed(
+    () =>
+      (!!token.value && !isTokenExpired(token.value)) ||
+      (!!refreshToken.value && !isTokenExpired(refreshToken.value))
+  );
   const username = computed(() => userInfo.value?.username || '');
   const nickname = computed(() => userInfo.value?.nickname || username.value);
   const isAdmin = computed(() => userInfo.value?.role === 'admin');
 
   function resetAuthState() {
     token.value = '';
+    refreshToken.value = '';
     userInfo.value = null;
     clearStoredAuth();
     closeTaskSocket();
@@ -41,19 +53,23 @@ export const useAuthStore = defineStore('auth', () => {
       const response = await authApi.login(credentials);
       const payload = response.data || {};
 
-      const loginToken = payload.token || payload.accessToken || '';
+      const loginToken = payload.access_token || payload.accessToken || payload.token || '';
+      const loginRefreshToken = payload.refresh_token || payload.refreshToken || '';
       if (!loginToken) {
         throw new Error('Login response missing token');
+      }
+      if (!loginRefreshToken) {
+        throw new Error('Login response missing refresh token');
       }
 
       const rawUser = payload.user || payload;
       const normalizedUser = normalizeUserInfo(rawUser, credentials?.username || '');
 
       token.value = loginToken;
+      refreshToken.value = loginRefreshToken;
       userInfo.value = normalizedUser;
 
-      localStorage.setItem('token', loginToken);
-      localStorage.setItem('userInfo', JSON.stringify(normalizedUser));
+      setStoredAuth(loginToken, loginRefreshToken, normalizedUser);
 
       ElMessage.success('登录成功');
       router.push('/');
@@ -78,22 +94,32 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  function logout() {
-    resetAuthState();
-    ElMessage.success('已退出登录');
-    router.push('/login');
+  async function logout(revokeRefreshToken = true) {
+    const tokenToRevoke = refreshToken.value || getStoredRefreshToken();
+    try {
+      if (revokeRefreshToken && tokenToRevoke) {
+        await authApi.logout(tokenToRevoke);
+      }
+    } catch (error) {
+      console.warn('Logout token revocation failed:', error);
+    } finally {
+      resetAuthState();
+      ElMessage.success('已退出登录');
+      router.push('/login');
+    }
   }
 
   function checkAuth() {
-    const savedToken = localStorage.getItem('token');
+    const savedToken = getStoredAccessToken();
+    const savedRefreshToken = getStoredRefreshToken();
     const savedUserInfo = localStorage.getItem('userInfo');
 
-    if (!savedToken || !savedUserInfo) {
+    if ((!savedToken && !savedRefreshToken) || !savedUserInfo) {
       resetAuthState();
       return false;
     }
 
-    if (isTokenExpired(savedToken)) {
+    if ((!savedToken || isTokenExpired(savedToken)) && (!savedRefreshToken || isTokenExpired(savedRefreshToken))) {
       resetAuthState();
       return false;
     }
@@ -101,6 +127,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const parsed = JSON.parse(savedUserInfo);
       token.value = savedToken;
+      refreshToken.value = savedRefreshToken;
       userInfo.value = normalizeUserInfo(parsed);
       return true;
     } catch {
@@ -111,6 +138,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   return {
     token,
+    refreshToken,
     userInfo,
     isLoggingIn,
     isAuthenticated,
