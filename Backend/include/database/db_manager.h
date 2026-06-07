@@ -20,6 +20,7 @@ struct MysqlConfig {
     std::string user;
     std::string password;
     std::optional<bool> ssl;
+    int pool_size{10};
 };
 
 MysqlConfig parseMysqlConfig(const nlohmann::json& dbConfig);

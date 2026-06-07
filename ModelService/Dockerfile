@@ -9,15 +9,15 @@ ENV MODEL_SERVICE_TEMP_DIR=/app/temp
 
 WORKDIR /app
 
-COPY requirements.txt ./
+COPY requirements-runtime.txt ./
 
 RUN python -m pip install --upgrade pip \
-    && pip install -r requirements.txt
+    && pip install -r requirements-runtime.txt
 
 RUN groupadd --system app \
     && useradd --system --gid app --create-home --home-dir /home/app app
 
-COPY model_service.py main.py train_lora.py ./
+COPY model_service.py main.py ./
 COPY model_service_app ./model_service_app
 
 RUN mkdir -p /app/logs /app/temp /app/models /app/outputs \

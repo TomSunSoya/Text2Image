@@ -1,0 +1,10 @@
+accelerate
+diffusers
+fastapi
+numpy
+Pillow
+safetensors
+torch
+transformers
+uvicorn[standard]
+prometheus-client

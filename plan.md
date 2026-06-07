@@ -25,6 +25,8 @@
 > **进度（2026-05-21）：** CODEX-B4 已完成：新增 `/profile`、`/admin`、`/403`、NotFound 和 App 错误边界；Backend 新增 `/api/auth/me` 与 `/api/auth/password`，改密成功会撤销该用户全部 refresh token 并要求重新登录。Backend 完整 CTest、B4 定向单测、Frontend build、prod compose 配置校验和 diff 检查通过。
 >
 > **进度（2026-05-22）：** CODEX-B3 已完成：生产 compose 改为 Docker Secrets + `*_FILE` secret 引用，Backend 配置加载支持 `DB_PASSWORD_FILE` / `JWT_SECRET_FILE` / `REDIS_PASSWORD_FILE` / `CACHE_PASSWORD_FILE` / `MINIO_SECRET_KEY_FILE`，`.env.production.example` 移除明文 secret 占位，备份/迁移脚本支持 secret 文件，新增 `k8s/secrets.yaml.example`。Backend 构建、完整 CTest、ModelService pytest、Frontend build、prod compose 配置校验、shell 语法检查、secret 明文搜索、clang-format dry-run 和 diff 检查通过。
+>
+> **进度（2026-06-07）：** P3-C 运营优化已落地：新增 `docs/openapi.yaml` + Swagger 预览说明、Backend 结构化审计日志（auth / image create-delete-cancel-retry / admin cache metrics 访问，带 timestamp / request id / resource id / user id / ip / status 且不记录密码、token、prompt、图片内容）、`ops/load-tests` 的 k6/wrk 压测脚本与 QPS/p95/p99/runbook、`train_lora.py` 从 ModelService runtime 镜像隔离并新增 `Dockerfile.train`、`DB_POOL_SIZE` 接入配置/compose/env/Prometheus capacity gauge/容量公式说明、跨 Backend / ModelService `X-Request-Id` 读写回显与 `/generate` 透传。两个 YAGNI 小尾巴继续保持：`HttpError Kind enum` 暂未触发，`MetricsController` admin guard 等第 2 个 admin 端点再抽。
 
 ## 1. MinIO 客户端连接复用 ✅ 已完成 (4cf7f19)
 
@@ -980,12 +982,12 @@ P2 已闭环。下一步可从新的 P3/部署验证/性能压测中选一条，
 
 ### P3-C 可选优化（运营期逐步遇到）
 
-- **OpenAPI / Swagger 文档**：当前 API 表只在 README 手写。Drogon 不原生支持 OpenAPI；可手动维护 `openapi.yaml` 或借助 `nlohmann::json::meta()` 反射生成
-- **审计日志**：删除 / 取消 / 重试等敏感操作单独写审计表，至少存 `user_id / action / resource_id / timestamp / ip`
-- **压测数据**：plan.md 自己写了"下一步可从新的 P3/部署验证/性能压测中选一条"。建议至少跑一次 `wrk` / `k6` 找出 Backend 单实例 QPS 上限、worker 池调优参数
-- **`train_lora.py` 镜像隔离**：确认 `ModelService/Dockerfile` 没有把 LoRA 训练工具包含进 runtime 镜像（推理服务不需要 transformers 训练依赖）
-- **数据库连接池调优**：`task_engine.workers` 增大时 MySQL 连接数会同步增长，需要确认 pool 上限和 worker 数的关系（生产 `BACKEND_REPLICAS=2` × `TASK_ENGINE_WORKERS=2` × DB pool 不应超过 `max_connections`）
-- **请求 trace ID**：跨 Backend / ModelService 透传 `X-Request-Id`，便于排查跨服务问题
+- **OpenAPI / Swagger 文档** ✅ 已完成（2026-06-07）：新增 `docs/openapi.yaml` 覆盖 Backend 公开 API、鉴权、错误 envelope、`X-Request-Id` 响应头；`docs/openapi.md` 提供 Swagger UI 预览命令。
+- **审计日志** ✅ 已完成（2026-06-07）：Backend 新增 `utils/audit_log` 与 `controllers::auditRequest`，覆盖 auth register/login/refresh/logout/changePassword、image create/delete/cancel/retry、admin cache metrics 访问；日志仅记录 `timestamp / event / outcome / request_id / client_ip / resource_id / status / user_id`，不记录 token、密码、prompt、base64、图片内容或完整请求体。
+- **压测数据** ✅ 已完成（2026-06-07）：新增 `ops/load-tests/k6_backend.js`、`wrk_health.lua`、`wrk_images_list.lua` 与 runbook；默认压健康/读取路径，任务创建需 `ENABLE_CREATE=true` 显式开启。
+- **`train_lora.py` 镜像隔离** ✅ 已完成（2026-06-07）：`ModelService/Dockerfile` runtime 只复制推理入口与 `requirements-runtime.txt`，不再包含 `train_lora.py`；新增 `ModelService/Dockerfile.train` 作为训练专用镜像。
+- **数据库连接池调优** ✅ 已完成（2026-06-07）：`DB_POOL_SIZE` 接入 Backend 配置覆盖、compose、示例 env 与 `MysqlConfig::pool_size`；启动时按 `BACKEND_THREADS + TASK_ENGINE_WORKERS + 1` 估算单副本 session 需求并告警，`/metrics` 暴露 `db_pool_configured_connections`。当前 DBManager 是 thread-local session 设计，不强行引入借还式连接池。
+- **请求 trace ID** ✅ 已完成（2026-06-07）：Backend `utils/request_id` + PreRouting/PreSending advice 读取或生成 `X-Request-Id` 并回显，`/generate` 出站透传；ModelService `trace.py` 纯 ASGI 中间件读取/生成并回显，日志统一带 `[request_id]`。注意：业务幂等键 `request_id`（请求体）与跨服务 trace `X-Request-Id`（请求头）是两个不同概念，仅在 `/generate` 路径上取值一致。
 
 ---
 

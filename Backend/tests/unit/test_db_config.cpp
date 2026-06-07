@@ -106,6 +106,7 @@ TEST(MysqlConfig, ParseLeavesSslUnsetWhenMissing) {
     EXPECT_EQ(cfg.host, "127.0.0.1");
     EXPECT_EQ(cfg.port, 33060);
     EXPECT_FALSE(cfg.ssl.has_value());
+    EXPECT_EQ(cfg.pool_size, 10);
 }
 
 TEST(MysqlConfig, ParseReadsExplicitSslFlag) {
@@ -126,6 +127,35 @@ TEST(MysqlConfig, ParseReadsExplicitSslFlag) {
     cfg = database::parseMysqlConfig(dbConfig);
     ASSERT_TRUE(cfg.ssl.has_value());
     EXPECT_TRUE(*cfg.ssl);
+}
+
+TEST(MysqlConfig, ParseReadsAndClampsPoolSize) {
+    nlohmann::json dbConfig = {
+        {"host", "127.0.0.1"},
+        {"port", 33060},
+        {"username", "user"},
+        {"password", "secret"},
+        {"database", "image_generator"},
+        {"pool_size", 24},
+    };
+
+    auto cfg = database::parseMysqlConfig(dbConfig);
+    EXPECT_EQ(cfg.pool_size, 24);
+
+    dbConfig["pool_size"] = 0;
+    cfg = database::parseMysqlConfig(dbConfig);
+    EXPECT_EQ(cfg.pool_size, 1);
+}
+
+TEST(BackendConfig, LoadConfigAppliesDatabasePoolSizeEnvOverride) {
+    const ScopedEnvVar poolOverride("DB_POOL_SIZE", std::string("32"));
+    const auto path = writeTempConfig({{"database", {{"host", "db.internal"}, {"pool_size", 10}}}});
+
+    const auto config = backend::loadConfig(path.string());
+
+    EXPECT_EQ(config.at("database").at("pool_size").get<int>(), 32);
+
+    std::filesystem::remove(path);
 }
 
 TEST(BackendConfig, LoadConfigAppliesDatabaseSslEnvOverride) {

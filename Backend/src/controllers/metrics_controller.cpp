@@ -1,10 +1,13 @@
 #include "controllers/metrics_controller.h"
 
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include <nlohmann/json.hpp>
+#include <spdlog/spdlog.h>
 
+#include "controllers/handler_utils.h"
 #include "services/metrics_registry.h"
 #include "utils/jwt_utils.h"
 
@@ -34,6 +37,8 @@ void MetricsController::getCacheMetrics(
     const auto token = utils::extractBearerToken(req);
     if (!token) {
         fillError(resp, drogon::HttpStatusCode::k401Unauthorized, "missing bearer token");
+        controllers::auditRequest(req, "metrics.cache.read", "failure", std::nullopt,
+                                  static_cast<int>(resp->getStatusCode()));
         callback(resp);
         return;
     }
@@ -41,22 +46,38 @@ void MetricsController::getCacheMetrics(
     const auto payload = utils::verifyToken(*token);
     if (!payload || payload->user_id <= 0) {
         fillError(resp, drogon::HttpStatusCode::k401Unauthorized, "invalid token");
+        controllers::auditRequest(req, "metrics.cache.read", "failure", std::nullopt,
+                                  static_cast<int>(resp->getStatusCode()));
         callback(resp);
         return;
     }
 
     if (payload->role != "admin") {
         fillError(resp, drogon::HttpStatusCode::k403Forbidden, "admin role required");
+        controllers::auditRequest(req, "metrics.cache.read", "failure",
+                                  std::optional<int64_t>{payload->user_id},
+                                  static_cast<int>(resp->getStatusCode()), "metrics:cache");
         callback(resp);
         return;
     }
 
-    if (auto metrics = metricsRef()) {
-        resp->setBody(metrics->toJson().dump());
-    } else {
-        resp->setStatusCode(drogon::HttpStatusCode::k503ServiceUnavailable);
-        resp->setBody(R"({"error": "Cache metrics not initialized"})");
+    try {
+        if (auto metrics = metricsRef()) {
+            resp->setBody(metrics->toJson().dump());
+        } else {
+            resp->setStatusCode(drogon::HttpStatusCode::k503ServiceUnavailable);
+            resp->setBody(R"({"error": "Cache metrics not initialized"})");
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("MetricsController::getCacheMetrics: error: {}", e.what());
+        resp->setStatusCode(drogon::HttpStatusCode::k500InternalServerError);
+        resp->setBody(R"({"error": "failed to render cache metrics"})");
     }
+    controllers::auditRequest(req, "metrics.cache.read",
+                              resp->getStatusCode() == drogon::HttpStatusCode::k200OK ? "success"
+                                                                                      : "failure",
+                              std::optional<int64_t>{payload->user_id},
+                              static_cast<int>(resp->getStatusCode()), "metrics:cache");
     callback(resp);
 }
 

@@ -32,12 +32,14 @@ TEST_F(MetricsRegistryTest, TracksQueueAndDbGauges) {
     registry.incrementWorkerQueueDepth(2);
     registry.decrementWorkerQueueDepth();
     registry.setDbPoolStats(3, 7);
+    registry.setDbPoolCapacity(12);
 
     const auto text = registry.renderPrometheus();
 
     EXPECT_NE(text.find("worker_queue_depth 2"), std::string::npos);
     EXPECT_NE(text.find("db_pool_active_connections 3"), std::string::npos);
     EXPECT_NE(text.find("db_pool_idle 7"), std::string::npos);
+    EXPECT_NE(text.find("db_pool_configured_connections 12"), std::string::npos);
 }
 
 TEST_F(MetricsRegistryTest, RendersModelServiceHistogram) {

@@ -56,6 +56,10 @@ constexpr int kMaxImageSize = 2048;
 constexpr int kImageSizeStep = 64;
 constexpr int kMinNumSteps = 1;
 constexpr int kMaxNumSteps = 50;
+// Idempotency key shape shared with ModelService (api.py REQUEST_ID_PATTERN):
+// ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$. Enforcing it here keeps user-supplied request ids
+// out of outbound HTTP headers and log lines (no CR/LF/control-char injection).
+constexpr size_t kMaxRequestIdLength = 64;
 
 void trimInPlace(std::string& s) {
     auto notSpace = [](unsigned char c) { return !std::isspace(c); };
@@ -63,9 +67,31 @@ void trimInPlace(std::string& s) {
     s.erase(std::ranges::find_if(s | std::views::reverse, notSpace).base(), s.end());
 }
 
+bool isValidRequestId(std::string_view id) {
+    if (id.empty() || id.size() > kMaxRequestIdLength) {
+        return false;
+    }
+    const auto isAlnum = [](unsigned char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+    };
+    if (!isAlnum(static_cast<unsigned char>(id.front()))) {
+        return false;
+    }
+    return std::ranges::all_of(id, [&](char c) {
+        const auto byte = static_cast<unsigned char>(c);
+        return isAlnum(byte) || byte == '_' || byte == '-';
+    });
+}
+
 std::optional<ServiceError> validateGenerationParams(models::ImageGeneration& generation) {
     trimInPlace(generation.prompt);
     trimInPlace(generation.negative_prompt);
+    trimInPlace(generation.request_id);
+
+    if (!generation.request_id.empty() && !isValidRequestId(generation.request_id)) {
+        return ServiceError{drogon::k400BadRequest, "invalid_request_id",
+                            "request_id must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"};
+    }
 
     if (generation.prompt.empty()) {
         return ServiceError{drogon::k400BadRequest, "prompt_required", "prompt is required"};

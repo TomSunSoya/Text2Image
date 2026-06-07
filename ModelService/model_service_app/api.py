@@ -33,6 +33,7 @@ from .metrics import GENERATION_SECONDS, GENERATION_TOTAL, update_health_metrics
 from .pipelines import ZImageModelService
 from .schemas import GenerateRequest, GenerateResponse
 from .storage import cleanup_temp_files_once, resolve_temp_file
+from .trace import RequestIdMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,9 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Added last so it wraps as the outermost layer: assigns the trace id before
+    # any other middleware runs and echoes X-Request-Id on every response.
+    app.add_middleware(RequestIdMiddleware)
 
     @app.get("/")
     async def root():

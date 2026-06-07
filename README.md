@@ -95,6 +95,9 @@ Code: `Backend/tests/unit/image_service_test_fakes.h`
 
 ## API Reference
 
+Full OpenAPI 3.0 documentation lives in `docs/openapi.yaml`; see `docs/openapi.md` for a Swagger UI
+preview command.
+
 ### Auth
 
 - `POST /api/auth/register`
@@ -130,6 +133,9 @@ Code: `Backend/tests/unit/image_service_test_fakes.h`
 - `GET /metrics` — Prometheus text metrics for backend latency, task transitions, queue depth, DB gauges, and model-service outbound calls
 - `GET /api/metrics/cache` — admin-only cache hit/miss/degraded counters per namespace
 - `GET http://<model-service-host>:8081/metrics` — model-service Prometheus metrics for health, generation duration, active work, and GPU memory
+
+Operational notes for `X-Request-Id`, audit logs, DB session budget, LoRA training image isolation,
+and load testing are in `docs/operational-hardening.md`.
 
 `ModelService` health states: `healthy` (loaded, idle) / `busy` (loaded, generating) / `loading` (alive, still initializing) / `unhealthy` (failed or stuck past `MODEL_SERVICE_BUSY_UNHEALTHY_SECONDS`). The health response also exposes `active_kind` (`none / generate / edit`) and active-generation counters so the backend can back off without holding a worker lease until timeout.
 
@@ -332,7 +338,7 @@ Important settings:
 Environment-variable overrides are supported in the backend for common settings such as:
 
 - `BACKEND_PORT`
-- `DB_HOST` `DB_PORT` `DB_USERNAME` `DB_PASSWORD` `DB_NAME` `DB_SSL`
+- `DB_HOST` `DB_PORT` `DB_USERNAME` `DB_PASSWORD` `DB_NAME` `DB_POOL_SIZE` `DB_SSL`
 - `CORS_ENABLED` `CORS_ALLOW_ORIGINS`
 - `JWT_SECRET` `JWT_ACCESS_EXPIRATION_MINUTES` `JWT_REFRESH_EXPIRATION_DAYS`
 - `PYTHON_SERVICE_URL` `PYTHON_SERVICE_TIMEOUT_SECONDS`

@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -21,6 +22,7 @@
 #include "services/client.h"
 #include "services/http_error_mapper.h"
 #include "services/metrics_registry.h"
+#include "utils/request_id.h"
 
 namespace {
 
@@ -170,8 +172,17 @@ models::ImageGeneration GenerationClient::generate(models::ImageGeneration gener
         }
 
         const auto generateUrl = serviceUrl + "/generate";
+        std::vector<std::string> requestHeaders;
+        // Defense-in-depth: ImageService::create already enforces the idempotency shape, but
+        // legacy rows or other call paths could carry unsafe values. Sanitize again so a
+        // CR/LF/control char can never reach the outbound header (HTTP header injection).
+        if (const auto traceId = utils::sanitizeRequestId(generation.request_id);
+            !traceId.empty()) {
+            requestHeaders.push_back(std::format("X-Request-Id: {}", traceId));
+        }
         const auto startedAt = std::chrono::steady_clock::now();
-        auto rawResponse = httpClient_->postJson(generateUrl, timeoutSeconds, modelPayload.dump());
+        auto rawResponse =
+            httpClient_->postJson(generateUrl, timeoutSeconds, modelPayload.dump(), requestHeaders);
         metrics::MetricsRegistry::instance().observeModelServiceCall(
             "/generate", rawResponse.failure ? "error" : std::to_string(rawResponse.status_code),
             std::chrono::duration<double>(std::chrono::steady_clock::now() - startedAt).count());
