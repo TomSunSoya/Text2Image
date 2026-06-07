@@ -17,7 +17,8 @@
   },
   "jwt": {
     "secret": "CHANGE_ME",
-    "expiration_hours": 24
+    "access_expiration_minutes": 15,
+    "refresh_expiration_days": 7
   },
   "python_service": {
     "url": "http://model-service:8081",
@@ -32,14 +33,14 @@
   },
   "cors": {
     "enabled": true,
-    "allow_origins": [ "http://localhost:3000" ],
-    "allow_methods": [ "GET", "POST", "PUT", "DELETE", "OPTIONS" ],
-    "allow_headers": [ "Content-Type", "Authorization" ]
+    "allow_origins": ["http://localhost:3000"],
+    "allow_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization"]
   },
   "minio": {
     "endpoint": "http://127.0.0.1:9000",
     "access_key": "minioadmin",
-    "secret_key": "minioadmin",
+    "secret_key": "CHANGE_ME_MINIO_PASSWORD",
     "bucket": "zimage",
     "region": "us-east-1",
     "presign_expiry_seconds": 3600
@@ -60,5 +61,28 @@
     "task_queue_key": "zimage:task_queue",
     "lease_key_prefix": "zimage:lease:",
     "enabled": true
-}
+  },
+  "cache": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 6379,
+    "password": "",
+    "db": 1,
+    "pool_size": 4,
+    "connect_timeout_ms": 1000,
+    "socket_timeout_ms": 500,
+    "key_prefix": "zimage:",
+    "version_key_ttl_seconds": 86400
+  },
+  "rate_limit": {
+    "enabled": true,
+    "fail_open": true,
+    "trust_proxy": false,
+    "max_active_tasks_per_user": 3,
+    "user_create_capacity": 10,
+    "user_create_window_seconds": 60,
+    "auth_ip_capacity": 5,
+    "auth_ip_window_seconds": 60,
+    "key_prefix": "zimage:rate:"
+  }
 }

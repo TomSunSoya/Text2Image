@@ -14,6 +14,7 @@ class User {
     std::string password;
     std::string email;
     std::string nickname;
+    std::string role{"user"};
     std::chrono::system_clock::time_point created_at;
     std::chrono::system_clock::time_point updated_at;
     bool enabled{true};

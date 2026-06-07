@@ -18,10 +18,12 @@ logs/
 !.env.production.example
 *.local
 *.secret
+traefik/acme.json
 
 # AI coding metadata
 .claude/
 .qoder/
+.sisyphus/
 **/AGENTS.md
 **/agents.md
 **/agent.md
@@ -42,6 +44,7 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ipynb_checkpoints/
+ModelService/.pytest-temp/
 ModelService/__pycache__/
 ModelService/temp/
 ModelService/logs/

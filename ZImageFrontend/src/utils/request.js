@@ -1,7 +1,13 @@
 import axios from 'axios';
 import { ElMessage } from 'element-plus';
 import router from '@/router';
-import { clearStoredAuth, isTokenExpired } from '@/utils/jwt';
+import {
+  clearStoredAuth,
+  getStoredAccessToken,
+  getStoredRefreshToken,
+  isTokenExpired,
+  setStoredTokens,
+} from '@/utils/jwt';
 import { closeTaskSocket } from '@/utils/taskSocket';
 
 const request = axios.create({
@@ -9,6 +15,8 @@ const request = axios.create({
   timeout: 120000,
   withCredentials: false,
 });
+
+let refreshPromise = null;
 
 const extractErrorMessage = (payload) => {
   if (!payload) {
@@ -39,6 +47,64 @@ const extractErrorMessage = (payload) => {
   return '';
 };
 
+const normalizeAuthPayload = (body) => {
+  const payload = body?.data || body || {};
+  return {
+    accessToken: payload.access_token || payload.accessToken || payload.token || '',
+    refreshToken: payload.refresh_token || payload.refreshToken || '',
+    expiresIn: payload.expires_in || payload.expiresIn || 0,
+    user: payload.user || null,
+  };
+};
+
+const isAuthTokenRequest = (config = {}) =>
+  config.skipAuthRefresh || /^\/?auth\/(login|register|refresh|logout)$/.test(String(config.url || ''));
+
+const redirectToLogin = (message = '登录已过期，请重新登录') => {
+  ElMessage.error(message);
+  clearStoredAuth();
+  closeTaskSocket();
+  router.push('/login');
+};
+
+const refreshAccessToken = async () => {
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
+  const refreshToken = getStoredRefreshToken();
+  if (!refreshToken || isTokenExpired(refreshToken)) {
+    throw new Error('登录已过期，请重新登录');
+  }
+
+  refreshPromise = axios
+    .post(
+      '/auth/refresh',
+      { refresh_token: refreshToken },
+      {
+        baseURL: '/api',
+        timeout: 120000,
+        withCredentials: false,
+      }
+    )
+    .then((response) => {
+      const payload = normalizeAuthPayload(response.data);
+      if (!payload.accessToken || !payload.refreshToken) {
+        throw new Error('Refresh response missing token');
+      }
+      setStoredTokens(payload.accessToken, payload.refreshToken);
+      if (payload.user) {
+        localStorage.setItem('userInfo', JSON.stringify(payload.user));
+      }
+      return payload.accessToken;
+    })
+    .finally(() => {
+      refreshPromise = null;
+    });
+
+  return refreshPromise;
+};
+
 const parseErrorPayload = async (payload) => {
   if (!payload || typeof Blob === 'undefined' || !(payload instanceof Blob)) {
     return payload;
@@ -58,15 +124,16 @@ const parseErrorPayload = async (payload) => {
 };
 
 request.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token');
+  async (config) => {
+    let token = getStoredAccessToken();
     if (token) {
-      if (isTokenExpired(token)) {
-        clearStoredAuth();
-        closeTaskSocket();
-        ElMessage.error('登录已过期，请重新登录');
-        router.push('/login');
-        return Promise.reject(new Error('登录已过期，请重新登录'));
+      if (isTokenExpired(token) && !isAuthTokenRequest(config)) {
+        try {
+          token = await refreshAccessToken();
+        } catch (error) {
+          redirectToLogin(error.message);
+          return Promise.reject(error);
+        }
       }
 
       config.headers['Authorization'] = `Bearer ${token}`;
@@ -114,10 +181,21 @@ request.interceptors.response.use(
     error.message = message;
 
     if (error.response?.status === 401) {
-      ElMessage.error(message || '登录已过期，请重新登录');
-      clearStoredAuth();
-      closeTaskSocket();
-      router.push('/login');
+      const originalConfig = error.config || {};
+      if (!originalConfig._retry && !isAuthTokenRequest(originalConfig)) {
+        try {
+          const token = await refreshAccessToken();
+          originalConfig._retry = true;
+          originalConfig.headers = originalConfig.headers || {};
+          originalConfig.headers.Authorization = `Bearer ${token}`;
+          return request(originalConfig);
+        } catch (refreshError) {
+          redirectToLogin(refreshError.message || message || '登录已过期，请重新登录');
+          return Promise.reject(refreshError);
+        }
+      }
+
+      redirectToLogin(message || '登录已过期，请重新登录');
       return Promise.reject(error);
     }
 

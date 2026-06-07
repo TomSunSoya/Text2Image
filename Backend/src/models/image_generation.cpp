@@ -5,8 +5,9 @@ namespace models {
 
 static void putOptionalTime(nlohmann::json& j, const char* key,
                             const std::optional<std::chrono::system_clock::time_point>& value) {
-    if (value.has_value())
+    if (value.has_value()) {
         j[key] = utils::chrono::toDbString(*value);
+    }
 }
 
 static std::optional<std::string> readStringAny(const nlohmann::json& j,
@@ -50,9 +51,19 @@ static std::optional<double> readDoubleAny(const nlohmann::json& j,
     return std::nullopt;
 }
 
+static std::optional<std::chrono::system_clock::time_point>
+readTimeAny(const nlohmann::json& j, std::initializer_list<const char*> keys) {
+    if (const auto value = readStringAny(j, keys)) {
+        return utils::chrono::fromDbString(*value);
+    }
+
+    return std::nullopt;
+}
+
 nlohmann::json ImageGeneration::toJson() const {
     nlohmann::json j = {{"id", id},
                         {"taskId", id},
+                        {"userId", user_id},
                         {"requestId", request_id},
                         {"prompt", prompt},
                         {"negativePrompt", negative_prompt},
@@ -69,7 +80,8 @@ nlohmann::json ImageGeneration::toJson() const {
                         {"generationTime", generation_time},
                         {"createdAt", utils::chrono::toDbString(created_at)},
                         {"thumbnailUrl", thumbnail_url},
-                        {"storageKey", storage_key}};
+                        {"storageKey", storage_key},
+                        {"imageBytes", image_bytes}};
 
     if (seed.has_value()) {
         j["seed"] = seed.value();
@@ -112,6 +124,8 @@ ImageGeneration ImageGeneration::fromJson(const nlohmann::json& j) {
         img.thumbnail_url = *value;
     if (const auto value = readStringAny(j, {"storage_key", "storage_key", "storageKey"}))
         img.storage_key = *value;
+    if (const auto value = readStringAny(j, {"image_bytes", "imageBytes"}))
+        img.image_bytes = *value;
     if (const auto value = readStringAny(j, {"error_message", "errorMessage"}))
         img.error_message = *value;
     if (const auto value = readDoubleAny(j, {"generation_time", "generationTime"}))
@@ -124,6 +138,16 @@ ImageGeneration ImageGeneration::fromJson(const nlohmann::json& j) {
         img.failure_code = *value;
     if (const auto value = readStringAny(j, {"worker_id", "workerId"}))
         img.worker_id = *value;
+    if (const auto value = readTimeAny(j, {"created_at", "createdAt"}))
+        img.created_at = *value;
+    if (const auto value = readTimeAny(j, {"started_at", "startedAt"}))
+        img.started_at = *value;
+    if (const auto value = readTimeAny(j, {"completed_at", "completedAt"}))
+        img.completed_at = *value;
+    if (const auto value = readTimeAny(j, {"cancelled_at", "cancelledAt"}))
+        img.cancelled_at = *value;
+    if (const auto value = readTimeAny(j, {"lease_expires_at", "leaseExpiresAt"}))
+        img.lease_expires_at = *value;
 
     return img;
 }

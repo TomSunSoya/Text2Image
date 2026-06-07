@@ -1,17 +1,22 @@
 #pragma once
 
-#include "models/user.h"
-#include <optional>
+#include <cstdint>
 #include <string>
 
-class UserRepo {
+#include "database/i_user_repo.h"
+
+class UserRepo : public IUserRepo {
   public:
-    std::optional<models::User> findByUsername(const std::string& username);
-    std::optional<models::User> findByEmail(const std::string& email);
-    std::optional<models::User> findById(int64_t id);
+    [[nodiscard]] RepoResult<std::optional<models::User>>
+    findByUsername(const std::string& username) override;
+    [[nodiscard]] RepoResult<std::optional<models::User>>
+    findByEmail(const std::string& email) override;
+    [[nodiscard]] RepoResult<std::optional<models::User>> findById(int64_t id) override;
 
-    bool existsByUsername(const std::string& username);
-    bool existsByEmail(const std::string& email);
+    [[nodiscard]] RepoResult<bool> existsByUsername(const std::string& username) override;
+    [[nodiscard]] RepoResult<bool> existsByEmail(const std::string& email) override;
 
-    int64_t insert(const models::User& user);
+    [[nodiscard]] RepoResult<int64_t> insert(const models::User& user) override;
+    [[nodiscard]] RepoResult<bool> updatePassword(int64_t id,
+                                                  const std::string& passwordHash) override;
 };

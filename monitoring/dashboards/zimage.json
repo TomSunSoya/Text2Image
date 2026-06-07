@@ -1,0 +1,104 @@
+{
+  "uid": "zimage-observability",
+  "title": "ZImage Observability",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Backend QPS",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(image_request_duration_seconds_count[5m])) by (endpoint)",
+          "legendFormat": "{{endpoint}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Backend P95 Latency",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(image_request_duration_seconds_bucket[5m])) by (le, endpoint))",
+          "legendFormat": "{{endpoint}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Worker Queue Depth",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "worker_queue_depth",
+          "legendFormat": "queue"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Task State Transitions",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(image_task_total[5m])) by (status)",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "ModelService P95",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(model_service_generation_seconds_bucket[5m])) by (le))",
+          "legendFormat": "generate"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "ModelService Active Generations",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "model_service_active_generations",
+          "legendFormat": "active"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "ModelService GPU Memory",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "model_service_gpu_memory_allocated_bytes",
+          "legendFormat": "allocated"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 }
+    }
+  ]
+}

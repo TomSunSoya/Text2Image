@@ -1,9 +1,12 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <string>
 
 class MinioClient {
+    struct ClientBundle;
+
   public:
     struct Config {
         std::string endpoint;
@@ -15,6 +18,13 @@ class MinioClient {
     };
 
     explicit MinioClient(Config config);
+
+    ~MinioClient();
+
+    MinioClient(const MinioClient&) = delete;
+    MinioClient& operator=(const MinioClient&) = delete;
+    MinioClient(MinioClient&&) = delete;
+    MinioClient& operator=(MinioClient&&) = delete;
 
     bool putObject(const std::string& key, const std::string& data,
                    const std::string& contentType = "image/png") const;
@@ -33,4 +43,5 @@ class MinioClient {
 
   private:
     Config config_;
+    std::unique_ptr<ClientBundle> bundle_;
 };

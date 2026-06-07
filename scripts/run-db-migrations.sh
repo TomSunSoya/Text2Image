@@ -2,11 +2,37 @@
 
 set -eu
 
+read_secret() {
+  name="$1"
+  file_var_name="${name}_FILE"
+  eval "file_path=\"\${${file_var_name}:-}\""
+  if [ -n "${file_path}" ]; then
+    if [ ! -r "${file_path}" ]; then
+      echo "${file_var_name} points to unreadable secret file: ${file_path}" >&2
+      exit 1
+    fi
+    value="$(tr -d '\r' <"${file_path}")"
+    if [ -z "${value}" ]; then
+      echo "${file_var_name} points to empty secret file: ${file_path}" >&2
+      exit 1
+    fi
+    printf '%s' "${value}"
+    return
+  fi
+
+  eval "value=\"\${${name}:-}\""
+  if [ -z "${value}" ]; then
+    echo "${name} or ${file_var_name} is required" >&2
+    exit 1
+  fi
+  printf '%s' "${value}"
+}
+
 host="${MYSQL_HOST:-mysql}"
 port="${MYSQL_PORT:-3306}"
 database="${MYSQL_DATABASE:?MYSQL_DATABASE is required}"
 user="${MYSQL_USER:?MYSQL_USER is required}"
-password="${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}"
+password="$(read_secret MYSQL_PASSWORD)"
 migrations_dir="${MIGRATIONS_DIR:-/migrations}"
 
 mysql_exec() {

@@ -78,6 +78,18 @@ std::filesystem::path writeTempConfig(const nlohmann::json& config) {
     return path;
 }
 
+std::filesystem::path writeTempTextFile(const std::string& prefix, const std::string& content) {
+    const auto fileName =
+        prefix + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto path = std::filesystem::temp_directory_path() / fileName;
+
+    std::ofstream out(path, std::ios::binary);
+    out << content;
+    out.close();
+
+    return path;
+}
+
 } // namespace
 
 TEST(MysqlConfig, ParseLeavesSslUnsetWhenMissing) {
@@ -138,4 +150,98 @@ TEST(BackendConfig, LoadConfigIgnoresInvalidDatabaseSslEnvOverride) {
     EXPECT_FALSE(config.at("database").contains("ssl"));
 
     std::filesystem::remove(path);
+}
+
+TEST(BackendConfig, LoadConfigReadsSecretFileEnvOverrides) {
+    const auto dbSecret = writeTempTextFile("db-secret", "db-from-file\n");
+    const auto jwtSecret = writeTempTextFile("jwt-secret", "jwt-from-file\r\n");
+    const auto redisSecret = writeTempTextFile("redis-secret", "redis-from-file\n");
+    const auto cacheSecret = writeTempTextFile("cache-secret", "cache-from-file\n");
+    const auto minioSecret = writeTempTextFile("minio-secret", "minio-from-file\n");
+
+    const ScopedEnvVar dbFile("DB_PASSWORD_FILE", dbSecret.string());
+    const ScopedEnvVar jwtFile("JWT_SECRET_FILE", jwtSecret.string());
+    const ScopedEnvVar redisFile("REDIS_PASSWORD_FILE", redisSecret.string());
+    const ScopedEnvVar cacheFile("CACHE_PASSWORD_FILE", cacheSecret.string());
+    const ScopedEnvVar minioFile("MINIO_SECRET_KEY_FILE", minioSecret.string());
+
+    const ScopedEnvVar dbPlain("DB_PASSWORD", std::string("db-from-env"));
+    const ScopedEnvVar jwtPlain("JWT_SECRET", std::string("jwt-from-env"));
+    const ScopedEnvVar redisPlain("REDIS_PASSWORD", std::string("redis-from-env"));
+    const ScopedEnvVar cachePlain("CACHE_PASSWORD", std::string("cache-from-env"));
+    const ScopedEnvVar minioPlain("MINIO_SECRET_KEY", std::string("minio-from-env"));
+
+    const auto path = writeTempConfig({
+        {"database", {{"password", "db-from-config"}}},
+        {"jwt", {{"secret", "jwt-from-config"}}},
+        {"redis", {{"password", "redis-from-config"}}},
+        {"cache", {{"password", "cache-from-config"}}},
+        {"minio", {{"secret_key", "minio-from-config"}}},
+    });
+
+    const auto config = backend::loadConfig(path.string());
+
+    EXPECT_EQ(config.at("database").at("password").get<std::string>(), "db-from-file");
+    EXPECT_EQ(config.at("jwt").at("secret").get<std::string>(), "jwt-from-file");
+    EXPECT_EQ(config.at("redis").at("password").get<std::string>(), "redis-from-file");
+    EXPECT_EQ(config.at("cache").at("password").get<std::string>(), "cache-from-file");
+    EXPECT_EQ(config.at("minio").at("secret_key").get<std::string>(), "minio-from-file");
+
+    std::filesystem::remove(path);
+    std::filesystem::remove(dbSecret);
+    std::filesystem::remove(jwtSecret);
+    std::filesystem::remove(redisSecret);
+    std::filesystem::remove(cacheSecret);
+    std::filesystem::remove(minioSecret);
+}
+
+TEST(BackendConfig, LoadConfigFallsBackToPlainSecretEnvWhenFileEnvMissing) {
+    const ScopedEnvVar jwtFile("JWT_SECRET_FILE", std::nullopt);
+    const ScopedEnvVar jwtPlain("JWT_SECRET", std::string("jwt-from-env"));
+    const auto path = writeTempConfig({{"jwt", {{"secret", "jwt-from-config"}}}});
+
+    const auto config = backend::loadConfig(path.string());
+
+    EXPECT_EQ(config.at("jwt").at("secret").get<std::string>(), "jwt-from-env");
+
+    std::filesystem::remove(path);
+}
+
+TEST(BackendConfig, LoadConfigReportsMissingSecretFileClearly) {
+    const auto missingPath =
+        std::filesystem::temp_directory_path() /
+        ("missing-jwt-secret-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const ScopedEnvVar jwtFile("JWT_SECRET_FILE", missingPath.string());
+    const auto path = writeTempConfig({{"jwt", {{"secret", "jwt-from-config"}}}});
+
+    try {
+        (void)backend::loadConfig(path.string());
+        FAIL() << "loadConfig should reject missing JWT_SECRET_FILE";
+    } catch (const std::runtime_error& ex) {
+        const std::string message = ex.what();
+        EXPECT_NE(message.find("JWT_SECRET_FILE points to unreadable secret file"),
+                  std::string::npos);
+        EXPECT_NE(message.find(missingPath.string()), std::string::npos);
+    }
+
+    std::filesystem::remove(path);
+}
+
+TEST(BackendConfig, LoadConfigReportsEmptySecretFileClearly) {
+    const auto emptySecret = writeTempTextFile("empty-jwt-secret", "");
+    const ScopedEnvVar jwtFile("JWT_SECRET_FILE", emptySecret.string());
+    const auto path = writeTempConfig({{"jwt", {{"secret", "jwt-from-config"}}}});
+
+    try {
+        (void)backend::loadConfig(path.string());
+        FAIL() << "loadConfig should reject empty JWT_SECRET_FILE";
+    } catch (const std::runtime_error& ex) {
+        const std::string message = ex.what();
+        EXPECT_NE(message.find("JWT_SECRET_FILE points to empty secret file"), std::string::npos);
+        EXPECT_NE(message.find(emptySecret.string()), std::string::npos);
+    }
+
+    std::filesystem::remove(path);
+    std::filesystem::remove(emptySecret);
 }

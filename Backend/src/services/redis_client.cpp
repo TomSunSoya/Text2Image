@@ -1,7 +1,12 @@
 #include "services/redis_client.h"
 
 #include <algorithm>
+#include <format>
+#include <iterator>
+#include <optional>
+#include <ranges>
 #include <tuple>
+
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <sw/redis++/redis++.h>
@@ -11,7 +16,7 @@ struct redis::RedisClient::Impl {
 
     explicit Impl(const RedisConfig& cfg) : redis(buildOpts(cfg), buildPoolOpts(cfg)) {}
 
-private:
+  private:
     static sw::redis::ConnectionOptions buildOpts(const RedisConfig& cfg) {
         sw::redis::ConnectionOptions opts;
         opts.host = cfg.host;
@@ -57,7 +62,7 @@ void redis::RedisClient::enqueueTask(int64_t taskId) {
         impl_->redis.lpush(config_.task_queue_key, std::to_string(taskId));
     } catch (sw::redis::Error& e) {
         spdlog::warn("Redis enqueueTask failed: {}", e.what());
-        throw;      // down to sql
+        throw; // down to sql
     }
 }
 
@@ -72,15 +77,14 @@ void redis::RedisClient::rebuildTaskQueue(const std::vector<int64_t>& taskIds) {
 
     std::vector<std::string> args;
     args.reserve(taskIds.size());
-    for (const auto taskId : taskIds) {
-        args.push_back(std::to_string(taskId));
-    }
+    std::ranges::transform(taskIds, std::back_inserter(args),
+                           [](int64_t id) { return std::to_string(id); });
 
     const std::vector<std::string> keys{config_.task_queue_key};
 
     try {
-        std::ignore = impl_->redis.eval<long long>(
-            script, keys.begin(), keys.end(), args.begin(), args.end());
+        std::ignore = impl_->redis.eval<long long>(script, keys.begin(), keys.end(), args.begin(),
+                                                   args.end());
     } catch (const sw::redis::Error& e) {
         spdlog::warn("Redis rebuildTaskQueue failed: {}", e.what());
         throw;
@@ -134,9 +138,9 @@ bool redis::RedisClient::renewLease(int64_t taskId, const std::string& workerId,
       )";
     try {
         const auto result = impl_->redis.eval<long long>(script, {leaseKey(taskId)},
-                                                   {workerId, std::to_string(leaseSeconds)});
+                                                         {workerId, std::to_string(leaseSeconds)});
         return result == 1;
-    } catch (sw::redis::Error &e) {
+    } catch (sw::redis::Error& e) {
         spdlog::warn("Redis renewLease failed: {}", e.what());
         return false;
     }
@@ -156,13 +160,12 @@ bool redis::RedisClient::releaseLease(int64_t taskId, const std::string& workerI
         spdlog::warn("Redis releaseLease failed: {}", e.what());
         return false;
     }
-
 }
 
 bool redis::RedisClient::forceReleaseLease(int64_t taskId) {
     try {
         return impl_->redis.del(leaseKey(taskId)) > 0;
-    } catch (sw::redis::Error &e) {
+    } catch (sw::redis::Error& e) {
         spdlog::warn("Redis forceReleaseLease failed: {}", e.what());
         return false;
     }
@@ -177,10 +180,61 @@ bool redis::RedisClient::leaseExists(int64_t taskId) {
     }
 }
 
+void redis::RedisClient::setex(const std::string& key, const std::string& value,
+                               std::chrono::seconds ttl) const {
+    impl_->redis.setex(key, ttl, value);
+}
+
+std::optional<std::string> redis::RedisClient::get(const std::string& key) const {
+    auto value = impl_->redis.get(key);
+    if (!value) {
+        return std::nullopt;
+    }
+    return *value;
+}
+
+std::optional<std::string> redis::RedisClient::getDel(const std::string& key) const {
+    static const std::string script = R"(
+          local value = redis.call('GET', KEYS[1])
+          if value ~= false then
+              redis.call('DEL', KEYS[1])
+          end
+          return value
+      )";
+
+    auto value = impl_->redis.eval<sw::redis::OptionalString>(script, {key}, {});
+    if (!value) {
+        return std::nullopt;
+    }
+    return *value;
+}
+
+bool redis::RedisClient::del(const std::string& key) const {
+    return impl_->redis.del(key) > 0;
+}
+
+void redis::RedisClient::sadd(const std::string& key, const std::string& value) const {
+    impl_->redis.sadd(key, value);
+}
+
+void redis::RedisClient::srem(const std::string& key, const std::string& value) const {
+    impl_->redis.srem(key, value);
+}
+
+std::vector<std::string> redis::RedisClient::smembers(const std::string& key) const {
+    std::vector<std::string> members;
+    impl_->redis.smembers(key, std::back_inserter(members));
+    return members;
+}
+
+void redis::RedisClient::expire(const std::string& key, std::chrono::seconds ttl) const {
+    impl_->redis.expire(key, ttl);
+}
+
 redis::RedisClient::~RedisClient() = default;
 
 std::string redis::RedisClient::leaseKey(int64_t taskId) const {
-    return config_.lease_key_prefix + std::to_string(taskId);
+    return std::format("{}{}", config_.lease_key_prefix, taskId);
 }
 
 RedisConfig parseRedisConfig(const nlohmann::json& j) {

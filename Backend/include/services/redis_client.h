@@ -47,11 +47,21 @@ class RedisClient {
     bool forceReleaseLease(int64_t taskId);
     bool leaseExists(int64_t taskId);
 
+    // generic key/value helpers
+    void setex(const std::string& key, const std::string& value, std::chrono::seconds ttl) const;
+    std::optional<std::string> get(const std::string& key) const;
+    std::optional<std::string> getDel(const std::string& key) const;
+    bool del(const std::string& key) const;
+    void sadd(const std::string& key, const std::string& value) const;
+    void srem(const std::string& key, const std::string& value) const;
+    std::vector<std::string> smembers(const std::string& key) const;
+    void expire(const std::string& key, std::chrono::seconds ttl) const;
+
     ~RedisClient();
     RedisClient(const RedisClient&) = delete;
     RedisClient& operator=(const RedisClient&) = delete;
 
-private:
+  private:
     RedisClient() = default;
     std::string leaseKey(int64_t taskId) const;
 

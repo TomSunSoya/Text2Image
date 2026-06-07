@@ -1,5 +1,9 @@
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdlib>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -10,15 +14,97 @@
 
 #include "Backend.h"
 #include "database/db_manager.h"
+#include "services/cache_client.h"
 #include "services/image_service.h"
 #include "services/minio_client.h"
+#include "services/null_cache_client.h"
+#include "services/rate_limiter.h"
 #include "services/redis_client.h"
+#include "services/image_cache_key.h"
+#include "controllers/metrics_controller.h"
+#include "services/metrics_cache_client.h"
+#include "services/metrics_registry.h"
+
+namespace {
+
+std::string toLowerCopy(std::string value) {
+    std::ranges::transform(value, value.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+bool isProductionEnvironment() {
+    auto env = []() -> std::optional<std::string> {
+#ifdef _WIN32
+        char* raw = nullptr;
+        size_t size = 0;
+        if (_dupenv_s(&raw, &size, "ENV") != 0 || raw == nullptr) {
+            return std::nullopt;
+        }
+        std::string value(raw);
+        std::free(raw);
+        return value.empty() ? std::nullopt : std::optional<std::string>{std::move(value)};
+#else
+        const auto* raw = std::getenv("ENV");
+        if (raw == nullptr || raw[0] == '\0') {
+            return std::nullopt;
+        }
+        return std::string(raw);
+#endif
+    }();
+
+    if (!env) {
+        return false;
+    }
+    return toLowerCopy(*env) == "production";
+}
+
+bool isLocalCorsOrigin(const std::string& origin) {
+    const auto normalized = toLowerCopy(origin);
+    return normalized.find("localhost") != std::string::npos ||
+           normalized.find("127.0.0.1") != std::string::npos ||
+           normalized.find("[::1]") != std::string::npos ||
+           normalized.find("0.0.0.0") != std::string::npos;
+}
+
+void validateProductionCors(const nlohmann::json& config) {
+    if (!isProductionEnvironment() || !config.contains("cors") || !config.at("cors").is_object()) {
+        return;
+    }
+
+    const auto& corsConfig = config.at("cors");
+    if (!corsConfig.value("enabled", false)) {
+        return;
+    }
+
+    const auto origins = corsConfig.value("allow_origins", std::vector<std::string>{});
+    std::vector<std::string> unsafeOrigins;
+    for (const auto& origin : origins) {
+        if (origin == "*" || isLocalCorsOrigin(origin)) {
+            unsafeOrigins.push_back(origin);
+        }
+    }
+
+    if (!unsafeOrigins.empty()) {
+        std::string message = "CORS allow_origins contains unsafe production origins:";
+        for (const auto& origin : unsafeOrigins) {
+            message += " " + origin;
+        }
+        throw std::runtime_error(message);
+    }
+}
+
+} // namespace
 
 int main() {
     try {
         const auto config = backend::loadConfig();
         const auto& serverConfig = config.at("server");
         const auto& dbConfig = config.at("database");
+        if (dbConfig.contains("pool_size") && dbConfig.at("pool_size").is_number_integer()) {
+            metrics::MetricsRegistry::instance().setDbPoolStats(
+                0, (std::max)(0, dbConfig.at("pool_size").get<int>()));
+        }
 
         // --- JWT secret validation ---
         {
@@ -34,6 +120,8 @@ int main() {
                 }
             }
         }
+
+        validateProductionCors(config);
 
         // --- Redis initialization ---
         try {
@@ -53,11 +141,49 @@ int main() {
             spdlog::warn("Redis init failed: {} - falling back to polling", e.what());
         }
 
+        // --- Rate limiter initialization ---
+        try {
+            rate_limit::configureDefaultRateLimiter(config);
+            if (rate_limit::defaultRateLimitConfig().enabled) {
+                spdlog::info("Rate limiter enabled");
+            } else {
+                spdlog::info("Rate limiter disabled by configuration");
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("Rate limiter init failed: {} - continuing fail-open", e.what());
+        }
+
+        // --- Cache initialization ---
+        std::shared_ptr<cache::ICacheClient> cacheClient =
+            std::make_shared<cache::NullCacheClient>();
+        try {
+            if (config.contains("cache") && config.at("cache").is_object()) {
+                auto cacheConfig = parseCacheConfig(config.at("cache"));
+                if (cacheConfig.enabled) {
+                    cacheClient = std::make_shared<cache::RedisCacheClient>(cacheConfig);
+                }
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("Cache init failed: {} - falling back to no cache", e.what());
+            cacheClient = std::make_shared<cache::NullCacheClient>();
+        }
+
+        // Wrap with metrics decorator before injecting so all ImageService and TaskEngine
+        // cache operations flow through MetricsCacheClient.
+        auto cacheMetrics = std::make_shared<cache::CacheMetrics>();
+        cacheClient = std::make_shared<cache::MetricsCacheClient>(cacheClient, cacheMetrics);
+        MetricsController::setMetrics(cacheMetrics);
+        spdlog::info("Cache metrics endpoint enabled at /api/metrics/cache");
+
+        ImageService::setDefaultCache(cacheClient);
+
+        // --- Database initialization ---
+
         const auto mysqlConfig = database::parseMysqlConfig(dbConfig);
 
         try {
             database::DBManager::init(mysqlConfig);
-            ImageService::bootstrapWorkers();
+            ImageService::bootstrapWorkers(cacheClient);
             spdlog::info("Database initialized: {}:{}", mysqlConfig.host, mysqlConfig.port);
         } catch (const std::exception& e) {
             spdlog::warn("Database initialization failed: {}", e.what());
@@ -66,6 +192,9 @@ int main() {
         // --- MinIO initialization ---
         try {
             const auto& minioConfig = config.at("minio");
+            const int presignExpiry = minioConfig.value("presign_expiry_seconds", 3600);
+            ImageService::setPresignTtl(
+                image_cache::derivePresignTtl(std::chrono::seconds(presignExpiry)));
             MinioClient::Config minioCfg;
             minioCfg.endpoint = minioConfig.value("endpoint", std::string("http://localhost:9000"));
             minioCfg.access_key = minioConfig.value("access_key", std::string());
@@ -84,8 +213,8 @@ int main() {
                 }
 
                 if (attempt < kMinioMaxAttempts) {
-                    spdlog::warn("MinIO not ready yet ({}/{}), retrying in {}s",
-                                 attempt, kMinioMaxAttempts, kMinioRetryDelay.count());
+                    spdlog::warn("MinIO not ready yet ({}/{}), retrying in {}s", attempt,
+                                 kMinioMaxAttempts, kMinioRetryDelay.count());
                     std::this_thread::sleep_for(kMinioRetryDelay);
                 }
             }
@@ -115,6 +244,7 @@ int main() {
             };
 
         drogon::app().registerHandler("/health", healthHandler);
+        drogon::app().registerHandler("/api/health", healthHandler);
 
         const auto host = serverConfig.value("host", std::string("0.0.0.0"));
         const auto port = serverConfig.value("port", 8082);
@@ -125,13 +255,21 @@ int main() {
         constexpr size_t kMaxBodySize = 1 * 1024 * 1024;
 
         // --- CORS setup ---
-        bool corsAllowAll = false;
-        std::vector<std::string> corsOrigins;
-        std::string corsAllowMethods = "GET, POST, PUT, DELETE, OPTIONS";
-        std::string corsAllowHeaders = "Content-Type, Authorization";
-
         if (config.contains("cors") && config.at("cors").value("enabled", false)) {
             const auto& corsConfig = config.at("cors");
+            bool corsAllowAll = false;
+            std::vector<std::string> corsOrigins;
+
+            const auto joinHeaderList = [](const std::vector<std::string>& values) {
+                std::string joined;
+                for (size_t i = 0; i < values.size(); ++i) {
+                    if (i > 0) {
+                        joined += ", ";
+                    }
+                    joined += values[i];
+                }
+                return joined;
+            };
 
             auto origins = corsConfig.value("allow_origins", std::vector<std::string>{});
             for (const auto& origin : origins) {
@@ -141,24 +279,14 @@ int main() {
                 corsOrigins.push_back(origin);
             }
 
-            auto methods =
+            const auto methods =
                 corsConfig.value("allow_methods", std::vector<std::string>{"GET", "POST", "PUT",
                                                                            "DELETE", "OPTIONS"});
-            corsAllowMethods.clear();
-            for (size_t i = 0; i < methods.size(); ++i) {
-                if (i > 0)
-                    corsAllowMethods += ", ";
-                corsAllowMethods += methods[i];
-            }
 
-            auto headers = corsConfig.value(
+            const auto headers = corsConfig.value(
                 "allow_headers", std::vector<std::string>{"Content-Type", "Authorization"});
-            corsAllowHeaders.clear();
-            for (size_t i = 0; i < headers.size(); ++i) {
-                if (i > 0)
-                    corsAllowHeaders += ", ";
-                corsAllowHeaders += headers[i];
-            }
+            const auto corsAllowMethods = joinHeaderList(methods);
+            const auto corsAllowHeaders = joinHeaderList(headers);
 
             if (corsAllowAll) {
                 spdlog::warn("CORS allow_origins contains '*' — all origins accepted. "

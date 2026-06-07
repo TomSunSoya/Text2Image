@@ -1,50 +1,40 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
-#include "models/image_generation.h"
+#include "database/i_image_repo.h"
+#include "models/i_image_storage.h"
+#include "services/cache_client.h"
+#include "services/generation_client.h"
+#include "services/image_service_types.h"
 #include "services/service_error.h"
-
-struct ImageCreateResult {
-    models::ImageGeneration generation;
-};
-
-struct ImageListResult {
-    std::vector<models::ImageGeneration> content;
-    int64_t total_elements{0};
-};
-
-struct ImageGetResult {
-    models::ImageGeneration generation;
-};
-
-struct ImageBinaryResult {
-    std::string body;
-    std::string content_type{"image/png"};
-};
-
-struct ImageHealthResult {
-    std::string status{"unhealthy"};
-    bool model_loaded{false};
-    std::string detail;
-};
 
 class ImageService {
   public:
-    static void bootstrapWorkers();
+    ImageService();
+    ImageService(std::shared_ptr<IImageRepo> repo, std::shared_ptr<IImageStorage> storage);
+    ImageService(std::shared_ptr<IImageRepo> repo, std::shared_ptr<IImageStorage> storage,
+                 std::shared_ptr<cache::ICacheClient> cache);
+
+    static void bootstrapWorkers(std::shared_ptr<cache::ICacheClient> cache = nullptr);
+    static void setDefaultCache(std::shared_ptr<cache::ICacheClient> cache);
+    static void setPresignTtl(std::chrono::seconds ttl);
 
     [[nodiscard]] std::expected<ImageCreateResult, ServiceError>
-    create(int64_t userId, const nlohmann::json& payload) const;
+    create(int64_t userId, const nlohmann::json& payload, bool isAdmin = false) const;
 
     [[nodiscard]] std::expected<ImageListResult, ServiceError> listMy(int64_t userId, int page,
                                                                       int size) const;
     [[nodiscard]] std::expected<ImageListResult, ServiceError>
-    listMyByStatus(int64_t userId, const std::string& status, int page, int size) const;
+    listMyByStatus(int64_t userId, std::string_view status, int page, int size) const;
 
     [[nodiscard]] std::expected<ImageGetResult, ServiceError>
     getById(int64_t userId, int64_t id, bool includeImagePayload = true) const;
@@ -58,4 +48,17 @@ class ImageService {
     [[nodiscard]] std::expected<void, ServiceError> deleteById(int64_t userId, int64_t id) const;
 
     [[nodiscard]] ImageHealthResult checkHealth() const;
+
+  private:
+    std::shared_ptr<IImageRepo> repo_;
+    std::shared_ptr<IImageStorage> storage_;
+    std::shared_ptr<cache::ICacheClient> cache_;
+    GenerationClient generation_client_;
+
+    void writeToCache(std::string_view key, const models::ImageGeneration& image) const;
+    void presignInPlace(models::ImageGeneration& image) const;
+    void writeListCache(std::string_view key, const ImageListResult& result) const;
+    void invalidateListCacheFor(int64_t userId) const;
+    [[nodiscard]] std::string presignWithCache(const std::string& storageKey) const;
+    void presignListImagesInPlace(std::vector<models::ImageGeneration>& images) const;
 };

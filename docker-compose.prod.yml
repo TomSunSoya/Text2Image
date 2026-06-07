@@ -6,25 +6,119 @@ x-prod-defaults: &prod-defaults
       max-file: ${LOG_MAX_FILE:-5}
 
 services:
+  traefik:
+    <<: *prod-defaults
+    image: traefik:v3
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:-CHANGE_ME_EMAIL@example.com}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.le.acme.caserver=${TRAEFIK_ACME_CA_SERVER:-https://acme-staging-v02.api.letsencrypt.org/directory}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/acme.json:/letsencrypt/acme.json
+    cpus: ${TRAEFIK_CPUS:-0.25}
+    mem_limit: ${TRAEFIK_MEM_LIMIT:-128m}
+    security_opt:
+      - no-new-privileges:true
+
   minio:
     <<: *prod-defaults
+    ports: !reset []
+    expose:
+      - "9000"
+      - "9001"
     cpus: ${MINIO_CPUS:-1.0}
     mem_limit: ${MINIO_MEM_LIMIT:-512m}
+    environment:
+      MINIO_ROOT_PASSWORD: !reset null
+      MINIO_ROOT_PASSWORD_FILE: ${MINIO_ROOT_PASSWORD_FILE:-/run/secrets/minio_password}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'export MINIO_ROOT_PASSWORD="$$(cat "$${MINIO_ROOT_PASSWORD_FILE}")"; exec minio server /data --console-address ":9001"'
+    secrets:
+      - minio_password
 
   mysql:
     <<: *prod-defaults
+    ports: !reset []
+    expose:
+      - "3306"
+      - "33060"
     cpus: ${MYSQL_CPUS:-2.0}
     mem_limit: ${MYSQL_MEM_LIMIT:-2g}
+    environment:
+      MYSQL_ROOT_PASSWORD: !reset null
+      MYSQL_PASSWORD: !reset null
+      MYSQL_ROOT_PASSWORD_FILE: ${MYSQL_ROOT_PASSWORD_FILE:-/run/secrets/mysql_root_password}
+      MYSQL_PASSWORD_FILE: ${DB_PASSWORD_FILE:-/run/secrets/db_password}
+    secrets:
+      - mysql_root_password
+      - db_password
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h 127.0.0.1 -uroot -p$$(cat \"$${MYSQL_ROOT_PASSWORD_FILE}\") --silent",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   redis:
     <<: *prod-defaults
+    ports: !reset []
+    expose:
+      - "6379"
     cpus: ${REDIS_CPUS:-0.50}
     mem_limit: ${REDIS_MEM_LIMIT:-256m}
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes --requirepass "$$(cat "$${REDIS_PASSWORD_FILE}")"
+    environment:
+      REDIS_PASSWORD_FILE: ${REDIS_PASSWORD_FILE:-/run/secrets/redis_password}
+    secrets:
+      - redis_password
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "redis-cli --no-auth-warning -a \"$$(cat \"$${REDIS_PASSWORD_FILE}\")\" ping",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
 
   model-service:
     <<: *prod-defaults
+    ports: !reset []
+    expose:
+      - "${MODEL_SERVICE_PORT:-8081}"
     cpus: ${MODEL_SERVICE_CPUS:-4.0}
     mem_limit: ${MODEL_SERVICE_MEM_LIMIT:-12g}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import json,sys,urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:${MODEL_SERVICE_PORT:-8081}/health', timeout=3)); sys.exit(1 if data.get('status') == 'unhealthy' else 0)\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     deploy:
       replicas: ${MODEL_SERVICE_REPLICAS:-1}
     security_opt:
@@ -32,6 +126,33 @@ services:
 
   backend:
     <<: *prod-defaults
+    ports: !reset []
+    expose:
+      - "${BACKEND_PORT:-8080}"
+    environment:
+      DB_PASSWORD: !reset null
+      DB_PASSWORD_FILE: ${DB_PASSWORD_FILE:-/run/secrets/db_password}
+      JWT_SECRET: !reset null
+      JWT_SECRET_FILE: ${JWT_SECRET_FILE:-/run/secrets/jwt_secret}
+      REDIS_PASSWORD: !reset null
+      REDIS_PASSWORD_FILE: ${REDIS_PASSWORD_FILE:-/run/secrets/redis_password}
+      CACHE_PASSWORD: !reset null
+      CACHE_PASSWORD_FILE: ${CACHE_PASSWORD_FILE:-/run/secrets/redis_password}
+      MINIO_SECRET_KEY: !reset null
+      MINIO_SECRET_KEY_FILE: ${MINIO_SECRET_KEY_FILE:-/run/secrets/minio_password}
+    secrets:
+      - db_password
+      - jwt_secret
+      - redis_password
+      - minio_password
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.backend.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/api`)
+      - traefik.http.routers.backend.entrypoints=websecure
+      - traefik.http.routers.backend.tls=true
+      - traefik.http.routers.backend.tls.certresolver=le
+      - traefik.http.routers.backend.priority=100
+      - traefik.http.services.backend.loadbalancer.server.port=${BACKEND_PORT:-8080}
     cpus: ${BACKEND_CPUS:-2.0}
     mem_limit: ${BACKEND_MEM_LIMIT:-1g}
     deploy:
@@ -41,6 +162,17 @@ services:
 
   frontend:
     <<: *prod-defaults
+    ports: !reset []
+    expose:
+      - "80"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=Host(`${DOMAIN:-localhost}`)
+      - traefik.http.routers.frontend.entrypoints=websecure
+      - traefik.http.routers.frontend.tls=true
+      - traefik.http.routers.frontend.tls.certresolver=le
+      - traefik.http.routers.frontend.priority=10
+      - traefik.http.services.frontend.loadbalancer.server.port=80
     cpus: ${FRONTEND_CPUS:-0.50}
     mem_limit: ${FRONTEND_MEM_LIMIT:-256m}
     deploy:
@@ -50,3 +182,150 @@ services:
 
   db-migrate:
     <<: *prod-defaults
+    environment:
+      MYSQL_PASSWORD: !reset null
+      MYSQL_PASSWORD_FILE: ${DB_PASSWORD_FILE:-/run/secrets/db_password}
+    secrets:
+      - db_password
+
+  mysql-backup:
+    <<: *prod-defaults
+    image: mysql:8.4
+    profiles: ["ops"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${DB_NAME:-image_generator}
+      MYSQL_BACKUP_USER: ${MYSQL_BACKUP_USER:-root}
+      MYSQL_BACKUP_PASSWORD: !reset null
+      MYSQL_BACKUP_PASSWORD_FILE: ${MYSQL_BACKUP_PASSWORD_FILE:-/run/secrets/mysql_root_password}
+      MYSQL_BACKUP_DIR: /backups
+      MYSQL_BINLOG_SOURCE_DIR: /mysql-data
+      MYSQL_BACKUP_TIME_UTC: ${MYSQL_BACKUP_TIME_UTC:-02:00}
+      MYSQL_BACKUP_RETENTION_DAYS: ${MYSQL_BACKUP_RETENTION_DAYS:-7}
+      MYSQL_BACKUP_RUN_ONCE: ${MYSQL_BACKUP_RUN_ONCE:-false}
+      MYSQL_BACKUP_RUN_IMMEDIATELY: ${MYSQL_BACKUP_RUN_IMMEDIATELY:-false}
+    volumes:
+      - mysql-backups:/backups
+      - mysql-data:/mysql-data:ro
+      - ./scripts/backup-mysql.sh:/scripts/backup-mysql.sh:ro
+    secrets:
+      - mysql_root_password
+    entrypoint: ["sh", "/scripts/backup-mysql.sh"]
+    security_opt:
+      - no-new-privileges:true
+
+  mc-mirror:
+    <<: *prod-defaults
+    image: minio/mc
+    profiles: ["ops"]
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_HOST: minio
+      MINIO_PORT: 9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: !reset null
+      MINIO_ROOT_PASSWORD_FILE: ${MINIO_ROOT_PASSWORD_FILE:-/run/secrets/minio_password}
+      MINIO_BUCKET: ${MINIO_BUCKET:-zimage}
+      MYSQL_BACKUP_DIR: /mysql-backups
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-https://CHANGE_ME_S3_ENDPOINT}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-CHANGE_ME_BACKUP_BUCKET}
+      BACKUP_S3_ACCESS_KEY: !reset null
+      BACKUP_S3_ACCESS_KEY_FILE: ${BACKUP_S3_ACCESS_KEY_FILE:-/run/secrets/backup_s3_access_key}
+      BACKUP_S3_SECRET_KEY: !reset null
+      BACKUP_S3_SECRET_KEY_FILE: ${BACKUP_S3_SECRET_KEY_FILE:-/run/secrets/backup_s3_secret_key}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-zimage}
+      BACKUP_S3_RETENTION_DAYS: ${BACKUP_S3_RETENTION_DAYS:-30}
+      MINIO_MIRROR_TIME_UTC: ${MINIO_MIRROR_TIME_UTC:-03:00}
+      MINIO_MIRROR_RUN_ONCE: ${MINIO_MIRROR_RUN_ONCE:-false}
+      MINIO_MIRROR_RUN_IMMEDIATELY: ${MINIO_MIRROR_RUN_IMMEDIATELY:-false}
+    volumes:
+      - mysql-backups:/mysql-backups:ro
+      - ./scripts/mirror-minio.sh:/scripts/mirror-minio.sh:ro
+    secrets:
+      - minio_password
+      - backup_s3_access_key
+      - backup_s3_secret_key
+    entrypoint: ["/bin/sh", "/scripts/mirror-minio.sh"]
+    security_opt:
+      - no-new-privileges:true
+
+  prometheus:
+    <<: *prod-defaults
+    image: prom/prometheus:v2.55.1
+    profiles: ["monitoring"]
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+    depends_on:
+      backend:
+        condition: service_healthy
+      model-service:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  grafana:
+    <<: *prod-defaults
+    image: grafana/grafana:11.4.0
+    profiles: ["monitoring"]
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: !reset null
+      GF_SECURITY_ADMIN_PASSWORD__FILE: ${GRAFANA_ADMIN_PASSWORD_FILE:-/run/secrets/grafana_admin_password}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/dashboards:/var/lib/grafana/dashboards:ro
+    secrets:
+      - grafana_admin_password
+    depends_on:
+      prometheus:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  jwt_secret:
+    external: true
+    name: ${JWT_SECRET_NAME:-zimage_jwt_secret}
+  db_password:
+    external: true
+    name: ${DB_PASSWORD_SECRET_NAME:-zimage_db_password}
+  mysql_root_password:
+    external: true
+    name: ${MYSQL_ROOT_PASSWORD_SECRET_NAME:-zimage_mysql_root_password}
+  redis_password:
+    external: true
+    name: ${REDIS_PASSWORD_SECRET_NAME:-zimage_redis_password}
+  minio_password:
+    external: true
+    name: ${MINIO_PASSWORD_SECRET_NAME:-zimage_minio_password}
+  backup_s3_access_key:
+    external: true
+    name: ${BACKUP_S3_ACCESS_KEY_SECRET_NAME:-zimage_backup_s3_access_key}
+  backup_s3_secret_key:
+    external: true
+    name: ${BACKUP_S3_SECRET_KEY_SECRET_NAME:-zimage_backup_s3_secret_key}
+  grafana_admin_password:
+    external: true
+    name: ${GRAFANA_ADMIN_PASSWORD_SECRET_NAME:-zimage_grafana_admin_password}
+
+volumes:
+  mysql-backups:
+  prometheus-data:
+  grafana-data:

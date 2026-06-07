@@ -29,6 +29,7 @@ void JwtMiddleware::doFilter(const drogon::HttpRequestPtr& req, drogon::FilterCa
     // Pass the verified userId to downstream handlers via request attributes,
     // so controllers don't need to re-parse the JWT token.
     req->attributes()->insert("userId", payload->user_id);
+    req->attributes()->insert("userRole", payload->role);
 
     chainCallback();
 }

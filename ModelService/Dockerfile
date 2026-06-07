@@ -18,6 +18,7 @@ RUN groupadd --system app \
     && useradd --system --gid app --create-home --home-dir /home/app app
 
 COPY model_service.py main.py train_lora.py ./
+COPY model_service_app ./model_service_app
 
 RUN mkdir -p /app/logs /app/temp /app/models /app/outputs \
     && chown -R app:app /app

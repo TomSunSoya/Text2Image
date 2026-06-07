@@ -103,7 +103,7 @@ bool ImageStorage::remove(const std::string& storageKey) const {
     return minioClient().deleteObject(storageKey);
 }
 
-std::string ImageStorage::contentTypeForKey(const std::string& storageKey) const {
+std::string ImageStorage::contentTypeForKey(std::string_view storageKey) const {
     if (storageKey.ends_with(".jpg") || storageKey.ends_with(".jpeg"))
         return "image/jpeg";
     if (storageKey.ends_with(".webp"))

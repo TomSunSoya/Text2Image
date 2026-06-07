@@ -9,6 +9,7 @@ TEST(User_FromJson, AllFields) {
                         {"password", "secret123"},
                         {"email", "alice@test.com"},
                         {"nickname", "Alice"},
+                        {"role", "admin"},
                         {"enabled", true}};
 
     auto user = models::User::fromJson(j);
@@ -17,6 +18,7 @@ TEST(User_FromJson, AllFields) {
     EXPECT_EQ(user.password, "secret123");
     EXPECT_EQ(user.email, "alice@test.com");
     EXPECT_EQ(user.nickname, "Alice");
+    EXPECT_EQ(user.role, "admin");
     EXPECT_TRUE(user.enabled);
 }
 
@@ -26,6 +28,7 @@ TEST(User_FromJson, MissingFields) {
     EXPECT_EQ(user.username, "");
     EXPECT_EQ(user.password, "");
     EXPECT_EQ(user.email, "");
+    EXPECT_EQ(user.role, "user");
 }
 
 // ==================== toJson ====================
@@ -37,12 +40,14 @@ TEST(User_ToJson, ExcludesPassword) {
     user.password = "should-not-appear";
     user.email = "bob@test.com";
     user.nickname = "Bob";
+    user.role = "admin";
 
     auto j = user.toJson();
     EXPECT_EQ(j.at("id"), 42);
     EXPECT_EQ(j.at("username"), "bob");
     EXPECT_EQ(j.at("email"), "bob@test.com");
     EXPECT_EQ(j.at("nickname"), "Bob");
+    EXPECT_EQ(j.at("role"), "admin");
     EXPECT_FALSE(j.contains("password")); // password must be excluded
 }
 

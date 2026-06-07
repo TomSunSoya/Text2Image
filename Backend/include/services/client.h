@@ -3,24 +3,16 @@
 #include <string>
 #include <vector>
 
-struct HttpResult {
-    long status_code{0};
-    std::string body;
-    std::string error;
+#include "services/i_http_client.h"
 
-    bool ok() const;
-};
-
-class HttpClient {
+class HttpClient : public IHttpClient {
   public:
-    explicit HttpClient(long timeoutSeconds = 120);
+    HttpClient() = default;
 
-    HttpResult get(const std::string& url, const std::vector<std::string>& headers = {},
-                   bool followRedirects = false) const;
+    HttpResult get(const std::string& url, long timeoutSeconds,
+                   const std::vector<std::string>& headers = {},
+                   bool followRedirects = false) const override;
 
-    HttpResult postJson(const std::string& url, const std::string& payload,
-                        const std::vector<std::string>& headers = {}) const;
-
-  private:
-    long timeout_seconds_{120};
+    HttpResult postJson(const std::string& url, long timeoutSeconds, const std::string& payload,
+                        const std::vector<std::string>& headers = {}) const override;
 };

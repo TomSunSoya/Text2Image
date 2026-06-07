@@ -1,8 +1,33 @@
 <template>
-  <router-view />
+  <el-result
+    v-if="runtimeError"
+    icon="error"
+    title="页面加载失败"
+    :sub-title="runtimeError"
+    class="app-error"
+  >
+    <template #extra>
+      <el-button type="primary" @click="resetError">重新加载</el-button>
+    </template>
+  </el-result>
+  <router-view v-else />
 </template>
 
-<script setup></script>
+<script setup>
+import { ref, onErrorCaptured } from 'vue';
+
+const runtimeError = ref('');
+
+const resetError = () => {
+  runtimeError.value = '';
+  window.location.reload();
+};
+
+onErrorCaptured((error) => {
+  runtimeError.value = error?.message || '未知错误';
+  return false;
+});
+</script>
 
 <style>
 * {
@@ -25,6 +50,13 @@ body {
 
 #app {
   min-height: 100vh;
+}
+
+.app-error {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* 自定义滚动条 */

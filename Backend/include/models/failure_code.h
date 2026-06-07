@@ -14,5 +14,6 @@ inline constexpr std::string_view kMissingImagePayload = "missing_image_payload"
 inline constexpr std::string_view kStorageWriteFailed = "storage_write_failed";
 inline constexpr std::string_view kLeaseExpired = "lease_expired";
 inline constexpr std::string_view kLeaseExpiredMaxRetries = "lease_expired_max_retries";
+inline constexpr std::string_view kModelServiceUnavailable = "model_service_unavailable";
 
 } // namespace models::failure

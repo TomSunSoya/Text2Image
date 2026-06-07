@@ -19,9 +19,40 @@ export const authApi = {
     });
   },
 
-  // 登出（前端处理）
-  logout() {
-    localStorage.removeItem('token');
-    localStorage.removeItem('userInfo');
+  refresh(refreshToken) {
+    return request({
+      url: '/auth/refresh',
+      method: 'post',
+      data: {
+        refresh_token: refreshToken,
+      },
+      skipAuthRefresh: true,
+    });
+  },
+
+  logout(refreshToken) {
+    return request({
+      url: '/auth/logout',
+      method: 'post',
+      data: {
+        refresh_token: refreshToken,
+      },
+      skipAuthRefresh: true,
+    });
+  },
+
+  getProfile() {
+    return request({
+      url: '/auth/me',
+      method: 'get',
+    });
+  },
+
+  changePassword(data) {
+    return request({
+      url: '/auth/password',
+      method: 'put',
+      data,
+    });
   },
 };

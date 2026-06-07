@@ -1,0 +1,444 @@
+#include "services/task_engine.h"
+
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <format>
+#include <mutex>
+#include <stop_token>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#include <spdlog/spdlog.h>
+
+#include "Backend.h"
+#include "database/ImageRepo.h"
+#include "database/repo_error.h"
+#include "services/generation_client.h"
+#include "services/image_cache_key.h"
+#include "services/model_health_gate.h"
+#include "services/metrics_registry.h"
+#include "services/null_cache_client.h"
+#include "services/redis_client.h"
+#include "services/task_event_hub.h"
+
+namespace {
+
+struct TaskEngineConfig {
+    int workers{1};
+    int poll_interval_ms{500};
+    long lease_seconds{900};
+    int max_retries{3};
+    std::string worker_prefix{"backend-worker"};
+};
+
+TaskEngineConfig loadTaskEngineConfig() {
+    TaskEngineConfig config;
+
+    try {
+        const auto& backendConfig = backend::cachedConfig();
+        if (backendConfig.contains("task_engine") && backendConfig.at("task_engine").is_object()) {
+            const auto& taskEngineConfig = backendConfig.at("task_engine");
+            config.workers = (std::max)(0, taskEngineConfig.value("workers", config.workers));
+            config.poll_interval_ms =
+                (std::max)(100,
+                           taskEngineConfig.value("poll_interval_ms", config.poll_interval_ms));
+            config.lease_seconds =
+                (std::max)(30l, taskEngineConfig.value("lease_seconds", config.lease_seconds));
+            config.max_retries =
+                (std::max)(0, taskEngineConfig.value("max_retries", config.max_retries));
+            config.worker_prefix = taskEngineConfig.value("worker_prefix", config.worker_prefix);
+        }
+    } catch (const std::exception& ex) {
+        spdlog::error("Failed to load task engine config, using defaults. Exception: {}",
+                      ex.what());
+    } catch (...) {
+        spdlog::error("Failed to load task engine config, using defaults. Unknown exception.");
+    }
+    return config;
+}
+
+std::chrono::seconds leaseRenewInterval(long leaseSeconds) {
+    return std::chrono::seconds((std::max)(1l, leaseSeconds / 2));
+}
+
+void logRepoError(spdlog::level::level_enum level, const char* action, const RepoError& error) {
+    spdlog::log(level, "{} repository error kind={}, message={}", action,
+                static_cast<int>(error.kind), error.message);
+}
+
+} // namespace
+
+struct TaskEngine::Impl {
+    TaskEngineConfig config{loadTaskEngineConfig()};
+    GenerationClient generation_client;
+    std::shared_ptr<cache::ICacheClient> cache{std::make_shared<cache::NullCacheClient>()};
+    std::vector<std::jthread> workers;
+    std::once_flag start_once;
+    std::mutex notify_mutex;
+    std::condition_variable notify_cv;
+
+    void notifyWorkers() {
+        notify_cv.notify_all();
+    }
+
+    void invalidateAllForTask(int64_t userId, int64_t id) {
+        cache->del(image_cache::metaKey(userId, id));
+        cache->bumpVersion(image_cache::kListVersionNamespace, std::to_string(userId));
+    }
+
+    void releaseRedisLease(int64_t taskId, const std::string& workerId) {
+        try {
+            auto& r = redis::RedisClient::instance();
+            if (r.isAvailable()) {
+                r.releaseLease(taskId, workerId);
+            }
+        } catch (...) {
+        }
+    }
+
+    void enqueue(int64_t taskId) {
+        bool redisUp = false;
+        try {
+            auto& r = redis::RedisClient::instance();
+            redisUp = r.isAvailable();
+            if (redisUp) {
+                r.enqueueTask(taskId);
+                metrics::MetricsRegistry::instance().incrementWorkerQueueDepth();
+                return;
+            }
+        } catch (const std::exception& ex) {
+            // Redis was reachable but enqueueTask failed: task is in DB Queued but no
+            // Redis-blocked worker will see it. Log loudly; periodic recovery in
+            // leaseExpiryLoop will re-sync via rebuildTaskQueue.
+            spdlog::error("Failed to enqueue task {} to Redis (will recover via lease scanner): {}",
+                          taskId, ex.what());
+        } catch (...) {
+            spdlog::error(
+                "Failed to enqueue task {} to Redis (will recover via lease scanner): unknown",
+                taskId);
+        }
+        // Fallback path: wake MySQL-fallback workers waiting on cv.
+        metrics::MetricsRegistry::instance().incrementWorkerQueueDepth();
+        notifyWorkers();
+    }
+
+    std::jthread startLeaseKeeper(const models::ImageGeneration& task,
+                                  const std::string& workerId) {
+        const auto renewEvery = leaseRenewInterval(config.lease_seconds);
+
+        return std::jthread([taskId = task.id, userId = task.user_id, workerId,
+                             leaseSeconds = config.lease_seconds,
+                             renewEvery](std::stop_token stopToken) {
+            ImageRepo repo;
+            auto nextRenewal = std::chrono::steady_clock::now() + renewEvery;
+
+            while (!stopToken.stop_requested()) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (stopToken.stop_requested()) {
+                    break;
+                }
+
+                const auto now = std::chrono::steady_clock::now();
+                if (now < nextRenewal) {
+                    continue;
+                }
+
+                try {
+                    auto& r = redis::RedisClient::instance();
+                    if (r.isAvailable() && !r.renewLease(taskId, workerId, leaseSeconds)) {
+                        spdlog::warn("Redis lease lost id = {}, worker_id = {}", taskId, workerId);
+                    }
+                } catch (...) {
+                    spdlog::info("Redis is unavailable, start MySQL renew");
+                }
+
+                auto renewed = repo.renewLease(taskId, userId, workerId, leaseSeconds);
+                if (!renewed) {
+                    spdlog::warn("lease keeper failed to renew lease id={}, user_id={}, "
+                                 "worker_id={}, reason={}",
+                                 taskId, userId, workerId, renewed.error().message);
+                } else if (!*renewed) {
+                    spdlog::warn("lease keeper lost task claim id={}, user_id={}, worker_id={}",
+                                 taskId, userId, workerId);
+                    break;
+                }
+
+                nextRenewal = now + renewEvery;
+            }
+        });
+    }
+
+    bool applyModelHealthGate(ImageRepo& repo, models::ImageGeneration& task,
+                              const std::string& workerId, std::stop_token stopToken) {
+        const auto health = generation_client.checkHealth();
+        const auto decision = model_health::decideForGenerate(health, task.retry_count);
+        if (decision.action == model_health::GateAction::Proceed) {
+            return true;
+        }
+
+        if (decision.action == model_health::GateAction::Fail) {
+            task.status = models::TaskStatus::Failed;
+            task.failure_code = decision.failure_code;
+            task.error_message = decision.message;
+            task.completed_at = std::chrono::system_clock::now();
+            metrics::MetricsRegistry::instance().recordTaskStatus(task.status);
+
+            auto finished = repo.finishClaimedTask(task);
+            releaseRedisLease(task.id, workerId);
+            invalidateAllForTask(task.user_id, task.id);
+
+            if (!finished) {
+                logRepoError(spdlog::level::warn, "finish model-health-failed task",
+                             finished.error());
+            } else if (!*finished) {
+                spdlog::warn("failed to mark task id={} as model-health failed", task.id);
+            } else {
+                task.worker_id.clear();
+                task.lease_expires_at.reset();
+                TaskEventHub::instance().publishTaskUpdated(task);
+            }
+            return false;
+        }
+
+        auto deferred = repo.deferClaimedTaskForModelHealth(
+            task.id, task.user_id, workerId, decision.failure_code, decision.message);
+        releaseRedisLease(task.id, workerId);
+
+        if (!deferred) {
+            logRepoError(spdlog::level::warn, "defer task for model health", deferred.error());
+            return false;
+        }
+        if (!*deferred) {
+            spdlog::warn("failed to defer task id={} for model health", task.id);
+            return false;
+        }
+
+        task.status = models::TaskStatus::Queued;
+        ++task.retry_count;
+        task.failure_code = decision.failure_code;
+        task.error_message = decision.message;
+        task.worker_id.clear();
+        task.started_at.reset();
+        task.lease_expires_at.reset();
+        metrics::MetricsRegistry::instance().recordTaskStatus(task.status);
+
+        invalidateAllForTask(task.user_id, task.id);
+        TaskEventHub::instance().publishTaskUpdated(task);
+        enqueue(task.id);
+
+        spdlog::warn("deferred task id={} because model service status={}, active_kind={}, "
+                     "retry_count={}, backoff={}s",
+                     task.id, health.status, health.active_kind, task.retry_count,
+                     decision.backoff.count());
+        {
+            std::unique_lock lock(notify_mutex);
+            notify_cv.wait_for(lock, decision.backoff,
+                               [&] { return stopToken.stop_requested(); });
+        }
+        return false;
+    }
+
+    void processClaimedTask(ImageRepo& repo, models::ImageGeneration& task,
+                            const std::string& workerId, std::stop_token stopToken) {
+        invalidateAllForTask(task.user_id,
+                             task.id); // evict cache immediately when worker picks up the task
+        metrics::MetricsRegistry::instance().decrementWorkerQueueDepth();
+        metrics::MetricsRegistry::instance().recordTaskStatus(models::TaskStatus::Generating);
+        spdlog::info(
+            "task worker claimed task id = {}, user_id = {}, request_id = {}, worker_id = {}",
+            task.id, task.user_id, task.request_id, workerId);
+        TaskEventHub::instance().publishTaskUpdated(task);
+
+        if (!applyModelHealthGate(repo, task, workerId, stopToken)) {
+            return;
+        }
+
+        auto leaseKeeper = startLeaseKeeper(task, workerId);
+        auto result = generation_client.generate(task);
+        auto finishedResult = repo.finishClaimedTask(result);
+        leaseKeeper.request_stop();
+
+        releaseRedisLease(task.id, workerId);
+
+        if (!finishedResult) {
+            logRepoError(spdlog::level::warn, "finish claimed task", finishedResult.error());
+            GenerationClient::cleanupOrphanedStoredImage(result);
+            spdlog::warn("task worker failed to finish claimed task id = {}", task.id);
+        } else if (!*finishedResult) {
+            GenerationClient::cleanupOrphanedStoredImage(result);
+            spdlog::warn("task worker failed to finish claimed task id = {}", task.id);
+        } else {
+            metrics::MetricsRegistry::instance().recordTaskStatus(result.status);
+            invalidateAllForTask(
+                task.user_id,
+                task.id); // evict cache again to ensure any mid-flight updates are cleared
+            TaskEventHub::instance().publishTaskUpdated(result);
+        }
+    }
+
+    void workerLoop(std::stop_token stopToken, const std::string& workerId) {
+        ImageRepo repo;
+
+        while (!stopToken.stop_requested()) {
+            try {
+                auto& r = redis::RedisClient::instance();
+                const bool redisUp = r.isAvailable();
+
+                if (redisUp) {
+                    auto taskId = r.dequeueTask(std::chrono::seconds(1));
+                    if (!taskId) {
+                        continue;
+                    }
+
+                    if (!r.acquireLease(*taskId, workerId, config.lease_seconds)) {
+                        spdlog::debug("worker {} lost lease race for task {}", workerId, *taskId);
+                        continue;
+                    }
+                    auto task = repo.claimTaskById(*taskId, workerId, config.lease_seconds);
+                    if (!task) {
+                        logRepoError(spdlog::level::warn, "claim task by id", task.error());
+                        r.releaseLease(*taskId, workerId);
+                        continue;
+                    }
+                    if (!*task) {
+                        r.releaseLease(*taskId, workerId);
+                        continue;
+                    }
+                    processClaimedTask(repo, **task, workerId, stopToken);
+                } else {
+                    auto task = repo.claimNextTask(workerId, config.lease_seconds);
+                    if (!task) {
+                        logRepoError(spdlog::level::warn, "claim next task", task.error());
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(config.poll_interval_ms));
+                        continue;
+                    }
+                    if (!*task) {
+                        std::unique_lock lock(notify_mutex);
+                        notify_cv.wait_for(lock,
+                                           std::chrono::milliseconds(config.poll_interval_ms));
+                        continue;
+                    }
+                    processClaimedTask(repo, **task, workerId, stopToken);
+                }
+            } catch (const std::exception& ex) {
+                spdlog::error("task worker exception: {}, worker_id={}", ex.what(), workerId);
+                std::this_thread::sleep_for(std::chrono::milliseconds(config.poll_interval_ms));
+            } catch (...) {
+                spdlog::error("task worker unknown exception, worker_id={}", workerId);
+                std::this_thread::sleep_for(std::chrono::milliseconds(config.poll_interval_ms));
+            }
+        }
+    }
+
+    void leaseExpiryLoop(std::stop_token stopToken, int intervalSeconds) {
+        ImageRepo repo;
+
+        while (!stopToken.stop_requested()) {
+            std::this_thread::sleep_for(std::chrono::seconds(intervalSeconds));
+            if (stopToken.stop_requested()) {
+                break;
+            }
+
+            try {
+                auto expired = repo.expireLeasesReturningExpired();
+                if (!expired) {
+                    logRepoError(spdlog::level::err, "lease expiry scanner", expired.error());
+                    recoverOrphanedTasks();
+                    continue;
+                }
+                size_t requeued = 0;
+                for (const auto& t : *expired) {
+                    invalidateAllForTask(t.user_id, t.id);
+                    if (t.requeue) {
+                        enqueue(t.id);
+                        ++requeued;
+                    }
+                }
+                if (requeued > 0) {
+                    spdlog::info("lease expiry scanner recovered {} task(s)", requeued);
+                }
+            } catch (const std::exception& ex) {
+                spdlog::error("lease expiry scanner error: {}", ex.what());
+            }
+
+            // Periodic re-sync: recovers tasks whose enqueue() failed mid-flight
+            // (Redis up but command threw) by rebuilding the queue from DB.
+            recoverOrphanedTasks();
+        }
+    }
+
+    void recoverOrphanedTasks() {
+        try {
+            auto& r = redis::RedisClient::instance();
+            if (!r.isAvailable()) {
+                return;
+            }
+
+            ImageRepo repo;
+            auto ids = repo.findQueuedTaskIds();
+            if (!ids) {
+                logRepoError(spdlog::level::warn, "recover orphaned tasks", ids.error());
+                return;
+            }
+            r.rebuildTaskQueue(*ids);
+            metrics::MetricsRegistry::instance().setWorkerQueueDepth(
+                static_cast<int64_t>(ids->size()));
+
+            if (!ids->empty()) {
+                spdlog::info("Recovered {} orphaned queued task(s) into Redis", ids->size());
+            }
+        } catch (const std::exception& ex) {
+            spdlog::warn("Failed to recover orphaned tasks: {}", ex.what());
+        }
+    }
+
+    void bootstrap() {
+        std::call_once(start_once, [this] {
+            if (config.workers <= 0) {
+                spdlog::info("ImageService task engine disabled");
+                return;
+            }
+
+            recoverOrphanedTasks();
+
+            workers.reserve(static_cast<size_t>(config.workers) + 1);
+
+            for (int i = 0; i < config.workers; ++i) {
+                const auto workerId = std::format("{}-{}", config.worker_prefix, i + 1);
+                workers.emplace_back([this, workerId](std::stop_token stopToken) {
+                    workerLoop(stopToken, workerId);
+                });
+            }
+
+            constexpr int kLeaseExpiryIntervalSeconds = 30;
+            workers.emplace_back([this](std::stop_token stopToken) {
+                leaseExpiryLoop(stopToken, kLeaseExpiryIntervalSeconds);
+            });
+
+            spdlog::info("ImageService task engine started with {} worker(s) + lease scanner",
+                         config.workers);
+        });
+    }
+};
+
+TaskEngine::TaskEngine() : impl_(std::make_unique<Impl>()) {}
+
+TaskEngine::~TaskEngine() = default;
+
+void TaskEngine::bootstrap(std::shared_ptr<cache::ICacheClient> cache) {
+    if (cache)
+        impl_->cache = std::move(cache);
+    impl_->bootstrap();
+}
+
+void TaskEngine::enqueue(int64_t taskId) {
+    // Lazy bootstrap: callers (ImageService::create / retryById) rely on enqueue
+    // alone to make the task progress. Without this, if no one called bootstrap()
+    // explicitly the task would sit in the queue forever.
+    impl_->bootstrap();
+    impl_->enqueue(taskId);
+}

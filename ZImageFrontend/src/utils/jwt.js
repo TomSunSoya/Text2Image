@@ -1,3 +1,7 @@
+const ACCESS_TOKEN_KEY = 'token';
+const REFRESH_TOKEN_KEY = 'refreshToken';
+const USER_INFO_KEY = 'userInfo';
+
 export function decodeJwtPayload(token) {
   if (!token || typeof token !== 'string') {
     return null;
@@ -33,7 +37,32 @@ export function isTokenExpired(token) {
   return payload.exp * 1000 <= Date.now();
 }
 
+export function getStoredAccessToken() {
+  return localStorage.getItem(ACCESS_TOKEN_KEY) || '';
+}
+
+export function getStoredRefreshToken() {
+  return localStorage.getItem(REFRESH_TOKEN_KEY) || '';
+}
+
+export function setStoredTokens(accessToken, refreshToken) {
+  if (accessToken) {
+    localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
+  }
+  if (refreshToken) {
+    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+  }
+}
+
+export function setStoredAuth(accessToken, refreshToken, userInfo) {
+  setStoredTokens(accessToken, refreshToken);
+  if (userInfo) {
+    localStorage.setItem(USER_INFO_KEY, JSON.stringify(userInfo));
+  }
+}
+
 export function clearStoredAuth() {
-  localStorage.removeItem('token');
-  localStorage.removeItem('userInfo');
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+  localStorage.removeItem(USER_INFO_KEY);
 }

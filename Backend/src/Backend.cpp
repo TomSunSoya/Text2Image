@@ -2,10 +2,13 @@
 
 #include "utils/string_utils.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -121,6 +124,38 @@ void overrideString(nlohmann::json& object, const char* key, const char* envName
     }
 }
 
+std::string readSecretFile(const std::string& path, const char* envName) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error(
+            std::format("{} points to unreadable secret file: {}", envName, path));
+    }
+
+    std::string value((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+        value.pop_back();
+    }
+    if (value.empty()) {
+        throw std::runtime_error(std::format("{} points to empty secret file: {}", envName, path));
+    }
+
+    return value;
+}
+
+std::optional<std::string> readEnvOrSecretFile(const char* envName, const char* fileEnvName) {
+    if (auto path = readEnv(fileEnvName)) {
+        return readSecretFile(*path, fileEnvName);
+    }
+    return readEnv(envName);
+}
+
+void overrideSecretString(nlohmann::json& object, const char* key, const char* envName,
+                          const char* fileEnvName) {
+    if (auto value = readEnvOrSecretFile(envName, fileEnvName)) {
+        object[key] = *value;
+    }
+}
+
 void overrideInt(nlohmann::json& object, const char* key, const char* envName) {
     if (auto value = readEnv(envName)) {
         try {
@@ -135,6 +170,39 @@ void overrideBool(nlohmann::json& object, const char* key, const char* envName) 
         if (auto parsed = utils::parseBool(*value)) {
             object[key] = *parsed;
         }
+    }
+}
+
+std::string trimCopy(std::string value) {
+    const auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
+    value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
+    return value;
+}
+
+std::vector<std::string> parseCsvList(const std::string& value) {
+    std::vector<std::string> items;
+    size_t start = 0;
+
+    while (start <= value.size()) {
+        const auto end = value.find(',', start);
+        auto item = trimCopy(value.substr(start, end == std::string::npos ? end : end - start));
+        if (!item.empty()) {
+            items.push_back(std::move(item));
+        }
+
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+
+    return items;
+}
+
+void overrideStringList(nlohmann::json& object, const char* key, const char* envName) {
+    if (auto value = readEnv(envName)) {
+        object[key] = parseCsvList(*value);
     }
 }
 
@@ -179,9 +247,24 @@ void applyEnvOverrides(nlohmann::json& config) {
         redis = nlohmann::json::object();
     }
 
+    auto& cache = config["cache"];
+    if (!cache.is_object()) {
+        cache = nlohmann::json::object();
+    }
+
+    auto& rateLimit = config["rate_limit"];
+    if (!rateLimit.is_object()) {
+        rateLimit = nlohmann::json::object();
+    }
+
+    auto& cors = config["cors"];
+    if (!cors.is_object()) {
+        cors = nlohmann::json::object();
+    }
+
     overrideString(redis, "host", "REDIS_HOST");
     overrideInt(redis, "port", "REDIS_PORT");
-    overrideString(redis, "password", "REDIS_PASSWORD");
+    overrideSecretString(redis, "password", "REDIS_PASSWORD", "REDIS_PASSWORD_FILE");
     overrideInt(redis, "db", "REDIS_DB");
     overrideInt(redis, "pool_size", "REDIS_POOL_SIZE");
     overrideInt(redis, "connect_timeout_ms", "REDIS_CONNECT_TIMEOUT_MS");
@@ -190,6 +273,30 @@ void applyEnvOverrides(nlohmann::json& config) {
     overrideString(redis, "lease_key_prefix", "REDIS_LEASE_KEY_PREFIX");
     overrideBool(redis, "enabled", "REDIS_ENABLED");
 
+    overrideString(cache, "host", "CACHE_HOST");
+    overrideInt(cache, "port", "CACHE_PORT");
+    overrideSecretString(cache, "password", "CACHE_PASSWORD", "CACHE_PASSWORD_FILE");
+    overrideInt(cache, "db", "CACHE_DB");
+    overrideInt(cache, "pool_size", "CACHE_POOL_SIZE");
+    overrideInt(cache, "connect_timeout_ms", "CACHE_CONNECT_TIMEOUT_MS");
+    overrideInt(cache, "socket_timeout_ms", "CACHE_SOCKET_TIMEOUT_MS");
+    overrideString(cache, "key_prefix", "CACHE_KEY_PREFIX");
+    overrideInt(cache, "version_key_ttl_seconds", "CACHE_VERSION_KEY_TTL_SECONDS");
+    overrideBool(cache, "enabled", "CACHE_ENABLED");
+
+    overrideBool(rateLimit, "enabled", "RATE_LIMIT_ENABLED");
+    overrideBool(rateLimit, "fail_open", "RATE_LIMIT_FAIL_OPEN");
+    overrideBool(rateLimit, "trust_proxy", "RATE_LIMIT_TRUST_PROXY");
+    overrideInt(rateLimit, "max_active_tasks_per_user", "RATE_LIMIT_MAX_ACTIVE_TASKS_PER_USER");
+    overrideInt(rateLimit, "user_create_capacity", "RATE_LIMIT_USER_CREATE_CAPACITY");
+    overrideInt(rateLimit, "user_create_window_seconds", "RATE_LIMIT_USER_CREATE_WINDOW_SECONDS");
+    overrideInt(rateLimit, "auth_ip_capacity", "RATE_LIMIT_AUTH_IP_CAPACITY");
+    overrideInt(rateLimit, "auth_ip_window_seconds", "RATE_LIMIT_AUTH_IP_WINDOW_SECONDS");
+    overrideString(rateLimit, "key_prefix", "RATE_LIMIT_KEY_PREFIX");
+
+    overrideBool(cors, "enabled", "CORS_ENABLED");
+    overrideStringList(cors, "allow_origins", "CORS_ALLOW_ORIGINS");
+
     overrideString(server, "host", "BACKEND_HOST");
     overrideInt(server, "port", "BACKEND_PORT");
     overrideInt(server, "threads", "BACKEND_THREADS");
@@ -197,12 +304,21 @@ void applyEnvOverrides(nlohmann::json& config) {
     overrideString(database, "host", "DB_HOST");
     overrideInt(database, "port", "DB_PORT");
     overrideString(database, "username", "DB_USERNAME");
-    overrideString(database, "password", "DB_PASSWORD");
+    overrideSecretString(database, "password", "DB_PASSWORD", "DB_PASSWORD_FILE");
     overrideString(database, "database", "DB_NAME");
     overrideBool(database, "ssl", "DB_SSL");
 
-    overrideString(jwt, "secret", "JWT_SECRET");
-    overrideInt(jwt, "expiration_hours", "JWT_EXPIRATION_HOURS");
+    overrideSecretString(jwt, "secret", "JWT_SECRET", "JWT_SECRET_FILE");
+    overrideInt(jwt, "access_expiration_minutes", "JWT_ACCESS_EXPIRATION_MINUTES");
+    overrideInt(jwt, "refresh_expiration_days", "JWT_REFRESH_EXPIRATION_DAYS");
+    if (!jwt.contains("access_expiration_minutes")) {
+        if (auto legacyHours = readEnv("JWT_EXPIRATION_HOURS")) {
+            try {
+                jwt["access_expiration_minutes"] = (std::max)(1, std::stoi(*legacyHours) * 60);
+            } catch (...) {
+            }
+        }
+    }
 
     overrideString(pythonService, "url", "PYTHON_SERVICE_URL");
     overrideInt(pythonService, "timeout_seconds", "PYTHON_SERVICE_TIMEOUT_SECONDS");
@@ -219,7 +335,7 @@ void applyEnvOverrides(nlohmann::json& config) {
 
     overrideString(minio, "endpoint", "MINIO_ENDPOINT");
     overrideString(minio, "access_key", "MINIO_ACCESS_KEY");
-    overrideString(minio, "secret_key", "MINIO_SECRET_KEY");
+    overrideSecretString(minio, "secret_key", "MINIO_SECRET_KEY", "MINIO_SECRET_KEY_FILE");
     overrideString(minio, "bucket", "MINIO_BUCKET");
     overrideString(minio, "region", "MINIO_REGION");
     overrideInt(minio, "presign_expiry_seconds", "MINIO_PRESIGN_EXPIRY_SECONDS");
