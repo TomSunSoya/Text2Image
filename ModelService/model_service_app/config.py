@@ -4,6 +4,8 @@ from pathlib import Path
 
 import torch
 
+from .trace import install_request_id_log_factory
+
 
 def read_int_env(name: str, fallback: int) -> int:
     raw_value = os.getenv(name, "").strip()
@@ -76,9 +78,10 @@ LOG_PATH = Path(LOG_DIR).resolve()
 os.makedirs(TEMP_PATH, exist_ok=True)
 os.makedirs(LOG_PATH, exist_ok=True)
 
+install_request_id_log_factory()
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s",
     handlers=[
         logging.FileHandler(LOG_PATH / "model_service.log", encoding="utf-8"),
         logging.StreamHandler(),

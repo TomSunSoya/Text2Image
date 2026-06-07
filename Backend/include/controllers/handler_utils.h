@@ -25,6 +25,9 @@ void fillServiceError(const drogon::HttpResponsePtr& resp, const ServiceError& e
 void fillDirectError(const drogon::HttpResponsePtr& resp, drogon::HttpStatusCode status,
                      std::string code, std::string message);
 std::string clientIp(const drogon::HttpRequestPtr& req, bool trustProxy);
+void auditRequest(const drogon::HttpRequestPtr& req, std::string_view event,
+                  std::string_view outcome, std::optional<int64_t> userId, int statusCode,
+                  std::string_view resourceId = {});
 std::optional<utils::JwtPayload> resolveUser(const drogon::HttpRequestPtr& req,
                                              const drogon::HttpResponsePtr& resp);
 std::optional<int64_t> resolveUserId(const drogon::HttpRequestPtr& req,

@@ -1,0 +1,814 @@
+openapi: 3.0.3
+info:
+  title: Text2Image Backend API
+  version: 1.0.0
+  description: >
+    HTTP API for authentication, image generation tasks, health checks, and operational metrics.
+    Backend responses echo an `X-Request-Id` trace header; clients may provide a safe request id
+    with characters `[A-Za-z0-9._:-]` up to 128 characters.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local docker compose backend
+  - url: http://127.0.0.1:8082
+    description: Local Windows debug backend
+tags:
+  - name: Health
+  - name: Auth
+  - name: Images
+  - name: Metrics
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Backend health
+      operationId: getHealth
+      responses:
+        "200":
+          description: Backend and database are healthy
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackendHealth"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Backend health alias
+      operationId: getApiHealth
+      responses:
+        "200":
+          description: Backend and database are healthy
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackendHealth"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a user
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "200":
+          description: Registered user profile
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login and receive access and refresh tokens
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Token response
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh tokens
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Refreshed token response
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke a refresh token
+      operationId: logout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Logout accepted
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusOk"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user profile
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/auth/password:
+    put:
+      tags: [Auth]
+      summary: Change current user's password and revoke refresh tokens
+      operationId: changePassword
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          description: Password changed
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusOk"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/images/health:
+    get:
+      tags: [Images]
+      summary: Model service health as seen by Backend
+      operationId: getImageHealth
+      responses:
+        "200":
+          description: Model service health snapshot
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageHealth"
+  /api/images:
+    post:
+      tags: [Images]
+      summary: Create an image generation task
+      operationId: createImage
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImageCreateRequest"
+      responses:
+        "202":
+          description: Queued generation task
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGeneration"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/images/my-list:
+    get:
+      tags: [Images]
+      summary: List current user's image tasks
+      operationId: listMyImages
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Paged image tasks
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/images/my-list/status/{status}:
+    get:
+      tags: [Images]
+      summary: List current user's image tasks by status
+      operationId: listMyImagesByStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TaskStatusPath"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Paged image tasks
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/images/{id}:
+    get:
+      tags: [Images]
+      summary: Get an image task
+      operationId: getImage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ImageId"
+      responses:
+        "200":
+          description: Image task
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGeneration"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Images]
+      summary: Delete an image task
+      operationId: deleteImage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ImageId"
+      responses:
+        "200":
+          description: Deleted
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/images/{id}/binary:
+    get:
+      tags: [Images]
+      summary: Download generated image binary
+      operationId: getImageBinary
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ImageId"
+      responses:
+        "200":
+          description: Image bytes
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/images/{id}/status:
+    get:
+      tags: [Images]
+      summary: Get compact task status
+      operationId: getImageStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ImageId"
+      responses:
+        "200":
+          description: Task status
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/images/{id}/cancel:
+    post:
+      tags: [Images]
+      summary: Cancel a queued or running task
+      operationId: cancelImage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ImageId"
+      responses:
+        "200":
+          description: Updated image task
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGeneration"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/images/{id}/retry:
+    post:
+      tags: [Images]
+      summary: Retry a failed task
+      operationId: retryImage
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ImageId"
+      responses:
+        "200":
+          description: Updated image task
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGeneration"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/metrics/cache:
+    get:
+      tags: [Metrics]
+      summary: Cache metrics for admin users
+      operationId: getCacheMetrics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Cache metrics snapshot
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /metrics:
+    get:
+      tags: [Metrics]
+      summary: Prometheus metrics
+      operationId: getPrometheusMetrics
+      responses:
+        "200":
+          description: Prometheus exposition text
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            text/plain:
+              schema:
+                type: string
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  headers:
+    XRequestId:
+      description: Server trace id echoed from request or generated by Backend.
+      schema:
+        type: string
+        maxLength: 128
+        pattern: "^[A-Za-z0-9._:-]{1,128}$"
+  parameters:
+    ImageId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Size:
+      name: size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 10
+    TaskStatusPath:
+      name: status
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/TaskStatus"
+  responses:
+    BadRequest:
+      description: Invalid request
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/XRequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Unauthorized:
+      description: Missing or invalid token
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/XRequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Forbidden:
+      description: Insufficient role
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/XRequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    NotFound:
+      description: Resource not found
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/XRequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Conflict:
+      description: Resource conflict
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/XRequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/XRequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ServiceUnavailable:
+      description: Service unavailable
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/XRequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    BackendHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, unhealthy]
+        database:
+          type: string
+          enum: [up, down]
+      required: [status, database]
+    StatusOk:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+      required: [status]
+    RegisterRequest:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+        email:
+          type: string
+          format: email
+        nickname:
+          type: string
+      required: [username, password]
+    LoginRequest:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+      required: [username, password]
+    RefreshRequest:
+      type: object
+      properties:
+        refresh_token:
+          type: string
+      required: [refresh_token]
+    ChangePasswordRequest:
+      type: object
+      properties:
+        old_password:
+          type: string
+          format: password
+        new_password:
+          type: string
+          format: password
+      required: [old_password, new_password]
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        username:
+          type: string
+        email:
+          type: string
+        nickname:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+        enabled:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, username, role, enabled]
+    TokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+        user:
+          $ref: "#/components/schemas/User"
+      required: [access_token, refresh_token, expires_in, user]
+    ImageCreateRequest:
+      type: object
+      properties:
+        prompt:
+          type: string
+        negative_prompt:
+          type: string
+        num_steps:
+          type: integer
+          default: 8
+        height:
+          type: integer
+          default: 768
+        width:
+          type: integer
+          default: 768
+        seed:
+          type: integer
+        request_id:
+          type: string
+          description: Business idempotency key, separate from the `X-Request-Id` trace header.
+      required: [prompt]
+    TaskStatus:
+      type: string
+      enum: [queued, pending, generating, success, failed, cancelled, timeout]
+    ImageGeneration:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        userId:
+          type: integer
+          format: int64
+        requestId:
+          type: string
+        prompt:
+          type: string
+        negativePrompt:
+          type: string
+        numSteps:
+          type: integer
+        height:
+          type: integer
+        width:
+          type: integer
+        seed:
+          type: integer
+          nullable: true
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        retryCount:
+          type: integer
+        maxRetries:
+          type: integer
+        failureCode:
+          type: string
+        imageUrl:
+          type: string
+        thumbnailUrl:
+          type: string
+        errorMessage:
+          type: string
+        generationTime:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, requestId, status]
+    ImageList:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImageGeneration"
+        totalElements:
+          type: integer
+      required: [content, totalElements]
+    ImageStatus:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        requestId:
+          type: string
+        status:
+          $ref: "#/components/schemas/TaskStatus"
+        errorMessage:
+          type: string
+        failureCode:
+          type: string
+        generationTime:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        imageUrl:
+          type: string
+      required: [id, requestId, status]
+    ImageHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, busy, loading, unhealthy]
+        modelLoaded:
+          type: boolean
+        activeKind:
+          type: string
+          enum: [none, generate, edit]
+        activeGenerations:
+          type: integer
+        maxConcurrentGenerations:
+          type: integer
+        detail:
+          type: string
+      required: [status, modelLoaded, activeKind, activeGenerations, maxConcurrentGenerations]
+    ErrorEnvelope:
+      type: object
+      properties:
+        error:
+          oneOf:
+            - type: string
+            - type: object
+              properties:
+                code:
+                  type: string
+                message:
+                  type: string
+      required: [error]

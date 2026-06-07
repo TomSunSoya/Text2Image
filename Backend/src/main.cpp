@@ -24,6 +24,7 @@
 #include "controllers/metrics_controller.h"
 #include "services/metrics_cache_client.h"
 #include "services/metrics_registry.h"
+#include "utils/request_id.h"
 
 namespace {
 
@@ -101,10 +102,6 @@ int main() {
         const auto config = backend::loadConfig();
         const auto& serverConfig = config.at("server");
         const auto& dbConfig = config.at("database");
-        if (dbConfig.contains("pool_size") && dbConfig.at("pool_size").is_number_integer()) {
-            metrics::MetricsRegistry::instance().setDbPoolStats(
-                0, (std::max)(0, dbConfig.at("pool_size").get<int>()));
-        }
 
         // --- JWT secret validation ---
         {
@@ -180,6 +177,21 @@ int main() {
         // --- Database initialization ---
 
         const auto mysqlConfig = database::parseMysqlConfig(dbConfig);
+        const auto configuredTaskWorkers =
+            (std::max)(0, config.at("task_engine").value("workers", 2));
+        const auto estimatedDbDemand = serverConfig.value("threads", 1) + configuredTaskWorkers + 1;
+        metrics::MetricsRegistry::instance().setDbPoolCapacity(mysqlConfig.pool_size);
+        metrics::MetricsRegistry::instance().setDbPoolStats(0, mysqlConfig.pool_size);
+        if (mysqlConfig.pool_size < estimatedDbDemand) {
+            spdlog::warn("database.pool_size={} is below estimated per-replica session demand "
+                         "{} (server threads + task workers + main session). Increase "
+                         "DB_POOL_SIZE or reduce BACKEND_THREADS/TASK_ENGINE_WORKERS before "
+                         "raising replicas.",
+                         mysqlConfig.pool_size, estimatedDbDemand);
+        } else {
+            spdlog::info("Database session budget: pool_size={}, estimated per-replica demand={}",
+                         mysqlConfig.pool_size, estimatedDbDemand);
+        }
 
         try {
             database::DBManager::init(mysqlConfig);
@@ -254,6 +266,33 @@ int main() {
         // oversized payloads (the create endpoint only needs prompt text).
         constexpr size_t kMaxBodySize = 1 * 1024 * 1024;
 
+        // --- Request ID tracing (X-Request-Id) ---
+        drogon::app().registerPreRoutingAdvice(
+            [](const drogon::HttpRequestPtr& req,
+               std::function<void(const drogon::HttpResponsePtr&)>&&,
+               std::function<void()>&& accb) {
+                auto requestId =
+                    utils::sanitizeRequestId(req->getHeader(std::string(utils::kRequestIdHeader)));
+                if (requestId.empty()) {
+                    requestId = utils::generateRequestId();
+                }
+                req->attributes()->insert(std::string(utils::kRequestIdAttribute),
+                                          std::move(requestId));
+                accb();
+            });
+
+        drogon::app().registerPreSendingAdvice(
+            [](const drogon::HttpRequestPtr& req, const drogon::HttpResponsePtr& resp) {
+                const auto attrs = req->attributes();
+                const std::string attributeKey{utils::kRequestIdAttribute};
+                if (attrs->find(attributeKey)) {
+                    resp->addHeader(std::string(utils::kRequestIdHeader),
+                                    attrs->get<std::string>(attributeKey));
+                }
+            });
+
+        spdlog::info("Request ID tracing enabled (X-Request-Id)");
+
         // --- CORS setup ---
         if (config.contains("cors") && config.at("cors").value("enabled", false)) {
             const auto& corsConfig = config.at("cors");
@@ -284,7 +323,8 @@ int main() {
                                                                            "DELETE", "OPTIONS"});
 
             const auto headers = corsConfig.value(
-                "allow_headers", std::vector<std::string>{"Content-Type", "Authorization"});
+                "allow_headers",
+                std::vector<std::string>{"Content-Type", "Authorization", "X-Request-Id"});
             const auto corsAllowMethods = joinHeaderList(methods);
             const auto corsAllowHeaders = joinHeaderList(headers);
 

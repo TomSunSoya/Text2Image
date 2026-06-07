@@ -67,6 +67,7 @@ void MetricsRegistry::resetForTests() {
     worker_queue_depth_ = 0;
     db_pool_active_connections_ = 0;
     db_pool_idle_connections_ = 0;
+    db_pool_configured_connections_ = 0;
 }
 
 void MetricsRegistry::observeHistogram(std::map<std::string, Histogram>& histograms,
@@ -126,6 +127,11 @@ void MetricsRegistry::setDbPoolStats(int64_t activeConnections, int64_t idleConn
     db_pool_idle_connections_ = (std::max)(int64_t{0}, idleConnections);
 }
 
+void MetricsRegistry::setDbPoolCapacity(int64_t configuredConnections) {
+    std::lock_guard lock(mutex_);
+    db_pool_configured_connections_ = (std::max)(int64_t{0}, configuredConnections);
+}
+
 std::string MetricsRegistry::renderPrometheus() const {
     std::lock_guard lock(mutex_);
     std::ostringstream out;
@@ -150,6 +156,10 @@ std::string MetricsRegistry::renderPrometheus() const {
     out << "# HELP db_pool_idle Idle database connections known to Backend.\n";
     out << "# TYPE db_pool_idle gauge\n";
     out << "db_pool_idle " << db_pool_idle_connections_ << '\n';
+    out << "# HELP db_pool_configured_connections Configured database connection budget per "
+           "Backend replica.\n";
+    out << "# TYPE db_pool_configured_connections gauge\n";
+    out << "db_pool_configured_connections " << db_pool_configured_connections_ << '\n';
 
     out << "# HELP model_service_call_duration_seconds Backend outbound model-service call "
            "latency.\n";

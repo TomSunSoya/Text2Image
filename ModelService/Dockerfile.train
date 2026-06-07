@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+ENV MODEL_PATH=/app/models/Z-Image-Turbo
+
+WORKDIR /app
+
+COPY requirements.txt ./
+
+RUN python -m pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+COPY train_lora.py ./
+
+RUN groupadd --system trainer \
+    && useradd --system --gid trainer --create-home --home-dir /home/trainer trainer \
+    && mkdir -p /app/models /app/training_images /app/lora_output \
+    && chown -R trainer:trainer /app
+
+USER trainer
+
+CMD ["python", "train_lora.py"]

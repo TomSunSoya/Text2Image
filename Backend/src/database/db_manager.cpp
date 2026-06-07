@@ -1,5 +1,6 @@
 #include "database/db_manager.h"
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
@@ -12,6 +13,7 @@ MysqlConfig parseMysqlConfig(const nlohmann::json& dbConfig) {
     cfg.user = dbConfig.value("username", std::string());
     cfg.password = dbConfig.value("password", std::string());
     cfg.database = dbConfig.value("database", std::string());
+    cfg.pool_size = (std::max)(1, dbConfig.value("pool_size", 10));
     if (dbConfig.contains("ssl") && dbConfig.at("ssl").is_boolean()) {
         cfg.ssl = dbConfig.at("ssl").get<bool>();
     }
@@ -78,28 +80,27 @@ const MysqlConfig& DBManager::config() {
     return g_cfg;
 }
 
-bool DBManager::isHealthy()
-{
-	if (g_cfg.host.empty() || g_cfg.database.empty()) {
-		return false;
-	}
+bool DBManager::isHealthy() {
+    if (g_cfg.host.empty() || g_cfg.database.empty()) {
+        return false;
+    }
 
-	try {
-		auto& sess = threadSession();
-		sess.sql("SELECT 1").execute();
-		sess.getSchema(g_cfg.database, true);
-		return true;
-	} catch (const mysqlx::Error&) {
-		resetThreadSession();
-		try {
-			auto& sess = threadSession();
-			sess.sql("SELECT 1").execute();
-			sess.getSchema(g_cfg.database, true);
-			return true;
-		} catch (const mysqlx::Error&) {
-			return false;
-		}
-	}
+    try {
+        auto& sess = threadSession();
+        sess.sql("SELECT 1").execute();
+        sess.getSchema(g_cfg.database, true);
+        return true;
+    } catch (const mysqlx::Error&) {
+        resetThreadSession();
+        try {
+            auto& sess = threadSession();
+            sess.sql("SELECT 1").execute();
+            sess.getSchema(g_cfg.database, true);
+            return true;
+        } catch (const mysqlx::Error&) {
+            return false;
+        }
+    }
 }
 
 mysqlx::Session& DBManager::session() {

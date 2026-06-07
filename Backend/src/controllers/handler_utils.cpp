@@ -10,6 +10,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "services/rate_limiter.h"
+#include "utils/audit_log.h"
 #include "utils/jwt_utils.h"
 
 namespace {
@@ -43,6 +45,14 @@ std::string clientIp(const drogon::HttpRequestPtr& req, bool trustProxy) {
         }
     }
     return req->peerAddr().toIp();
+}
+
+void auditRequest(const drogon::HttpRequestPtr& req, std::string_view event,
+                  std::string_view outcome, std::optional<int64_t> userId, int statusCode,
+                  std::string_view resourceId) {
+    const auto& rateConfig = rate_limit::defaultRateLimitConfig();
+    audit::logHttpEvent(req, event, outcome, userId, statusCode,
+                        clientIp(req, rateConfig.trust_proxy), resourceId);
 }
 
 void fillServiceError(const drogon::HttpResponsePtr& resp, const ServiceError& error) {

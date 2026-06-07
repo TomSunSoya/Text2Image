@@ -25,6 +25,7 @@ class MetricsRegistry {
     void decrementWorkerQueueDepth(int64_t delta = 1);
     void setWorkerQueueDepth(int64_t depth);
     void setDbPoolStats(int64_t activeConnections, int64_t idleConnections);
+    void setDbPoolCapacity(int64_t configuredConnections);
 
     [[nodiscard]] std::string renderPrometheus() const;
 
@@ -47,6 +48,7 @@ class MetricsRegistry {
     int64_t worker_queue_depth_{0};
     int64_t db_pool_active_connections_{0};
     int64_t db_pool_idle_connections_{0};
+    int64_t db_pool_configured_connections_{0};
 };
 
 [[nodiscard]] std::string requestLabels(std::string_view endpoint, int statusCode);

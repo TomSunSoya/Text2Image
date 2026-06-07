@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <format>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <vector>
@@ -13,6 +14,10 @@
 #include "services/rate_limiter.h"
 
 namespace {
+
+int statusCode(const ServiceError& error) {
+    return static_cast<int>(error.status);
+}
 
 int parsePositiveInt(const std::string& value, int fallback) {
     int parsed{};
@@ -94,6 +99,8 @@ void ImageController::create(const drogon::HttpRequestPtr& req,
         [&req](const drogon::HttpResponsePtr& resp) {
             const auto user = controllers::resolveUser(req, resp);
             if (!user) {
+                controllers::auditRequest(req, "image.create", "failure", std::nullopt,
+                                          static_cast<int>(resp->getStatusCode()));
                 return;
             }
 
@@ -104,6 +111,9 @@ void ImageController::create(const drogon::HttpRequestPtr& req,
                     rate_limit::userKey(user->user_id, rateConfig), rateConfig.user_create_capacity,
                     rateConfig.user_create_window);
                 if (!acquired) {
+                    controllers::auditRequest(req, "image.create", "failure",
+                                              std::optional<int64_t>{user->user_id},
+                                              statusCode(acquired.error()));
                     controllers::fillServiceError(resp, acquired.error());
                     return;
                 }
@@ -111,8 +121,14 @@ void ImageController::create(const drogon::HttpRequestPtr& req,
 
             const auto payload = nlohmann::json::parse(req->getBody());
             ImageService service;
+            const auto result = service.create(user->user_id, payload, isAdmin);
+            controllers::auditRequest(
+                req, "image.create", result ? "success" : "failure",
+                std::optional<int64_t>{user->user_id},
+                result ? static_cast<int>(drogon::k202Accepted) : statusCode(result.error()),
+                result ? std::format("image:{}", result->generation.id) : std::string{});
             controllers::respondFromExpected(
-                resp, service.create(user->user_id, payload, isAdmin), drogon::k202Accepted,
+                resp, result, drogon::k202Accepted,
                 [](const ImageCreateResult& r) { return r.generation.toJson().dump(); });
         });
 }
@@ -193,24 +209,50 @@ void ImageController::getStatusById(const drogon::HttpRequestPtr& req,
 void ImageController::deleteById(const drogon::HttpRequestPtr& req,
                                  std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                                  int64_t id) {
-    controllers::runAuthenticatedJson(req, std::move(callback), "ImageController::deleteById",
-                                      [id](int64_t userId, const drogon::HttpResponsePtr& resp) {
-                                          ImageService service;
-                                          controllers::respondFromExpected(
-                                              resp, service.deleteById(userId, id), drogon::k200OK,
-                                              [] { return std::string(R"({"deleted":true})"); });
-                                      });
+    controllers::runJsonHandler(
+        std::move(callback), "ImageController::deleteById",
+        [&req, id](const drogon::HttpResponsePtr& resp) {
+            const auto userId = controllers::resolveUserId(req, resp);
+            if (!userId) {
+                controllers::auditRequest(req, "image.delete", "failure", std::nullopt,
+                                          static_cast<int>(resp->getStatusCode()));
+                return;
+            }
+
+            ImageService service;
+            const auto result = service.deleteById(*userId, id);
+            controllers::auditRequest(req, "image.delete", result ? "success" : "failure",
+                                      std::optional<int64_t>{*userId},
+                                      result ? static_cast<int>(drogon::k200OK)
+                                             : statusCode(result.error()),
+                                      std::format("image:{}", id));
+            controllers::respondFromExpected(resp, result, drogon::k200OK,
+                                             [] { return std::string(R"({"deleted":true})"); });
+        });
 }
 
 void ImageController::cancelById(const drogon::HttpRequestPtr& req,
                                  std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                                  int64_t id) {
-    controllers::runAuthenticatedJson(
-        req, std::move(callback), "ImageController::cancelById",
-        [id](int64_t userId, const drogon::HttpResponsePtr& resp) {
+    controllers::runJsonHandler(
+        std::move(callback), "ImageController::cancelById",
+        [&req, id](const drogon::HttpResponsePtr& resp) {
+            const auto userId = controllers::resolveUserId(req, resp);
+            if (!userId) {
+                controllers::auditRequest(req, "image.cancel", "failure", std::nullopt,
+                                          static_cast<int>(resp->getStatusCode()));
+                return;
+            }
+
             ImageService service;
+            const auto result = service.cancelById(*userId, id);
+            controllers::auditRequest(req, "image.cancel", result ? "success" : "failure",
+                                      std::optional<int64_t>{*userId},
+                                      result ? static_cast<int>(drogon::k200OK)
+                                             : statusCode(result.error()),
+                                      std::format("image:{}", id));
             controllers::respondFromExpected(
-                resp, service.cancelById(userId, id), drogon::k200OK,
+                resp, result, drogon::k200OK,
                 [](const ImageGetResult& r) { return r.generation.toJson().dump(); });
         });
 }
@@ -218,12 +260,24 @@ void ImageController::cancelById(const drogon::HttpRequestPtr& req,
 void ImageController::retryById(const drogon::HttpRequestPtr& req,
                                 std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                                 int64_t id) {
-    controllers::runAuthenticatedJson(
-        req, std::move(callback), "ImageController::retryById",
-        [id](int64_t userId, const drogon::HttpResponsePtr& resp) {
+    controllers::runJsonHandler(
+        std::move(callback), "ImageController::retryById",
+        [&req, id](const drogon::HttpResponsePtr& resp) {
+            const auto userId = controllers::resolveUserId(req, resp);
+            if (!userId) {
+                controllers::auditRequest(req, "image.retry", "failure", std::nullopt,
+                                          static_cast<int>(resp->getStatusCode()));
+                return;
+            }
+
             ImageService service;
+            const auto result = service.retryById(*userId, id);
+            controllers::auditRequest(
+                req, "image.retry", result ? "success" : "failure", std::optional<int64_t>{*userId},
+                result ? static_cast<int>(drogon::k200OK) : statusCode(result.error()),
+                std::format("image:{}", id));
             controllers::respondFromExpected(
-                resp, service.retryById(userId, id), drogon::k200OK,
+                resp, result, drogon::k200OK,
                 [](const ImageGetResult& r) { return r.generation.toJson().dump(); });
         });
 }

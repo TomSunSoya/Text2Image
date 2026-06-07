@@ -306,6 +306,7 @@ void applyEnvOverrides(nlohmann::json& config) {
     overrideString(database, "username", "DB_USERNAME");
     overrideSecretString(database, "password", "DB_PASSWORD", "DB_PASSWORD_FILE");
     overrideString(database, "database", "DB_NAME");
+    overrideInt(database, "pool_size", "DB_POOL_SIZE");
     overrideBool(database, "ssl", "DB_SSL");
 
     overrideSecretString(jwt, "secret", "JWT_SECRET", "JWT_SECRET_FILE");
