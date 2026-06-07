@@ -240,7 +240,7 @@ long long RedisTokenBucketLimiter::evalTokenBucket(std::string_view key, int cap
                                                    std::chrono::seconds window) {
     const auto now = nowMs().count();
     const auto windowMs = std::chrono::duration_cast<std::chrono::milliseconds>(window).count();
-    const auto ttlSeconds = (std::max)(1LL, window.count() * 2);
+    const auto ttlSeconds = std::max<long long>(1LL, window.count() * 2);
 
     const std::vector<std::string> keys{std::string{key}};
     const std::vector<std::string> args{std::to_string(capacity), std::to_string(windowMs),
